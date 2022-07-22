@@ -1,0 +1,5 @@
+/target
+/.vscode
+auth.json
+log.txt
+Cargo.lock
