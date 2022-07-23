@@ -7,6 +7,7 @@ use std::time::Duration;
 use reqwest::Url;
 use tokio_tungstenite::connect_async;
 use futures_util::{SinkExt, StreamExt};
+use std::collections::HashSet;
 
 #[tokio::main]
 async fn main() -> Result<()> {
@@ -25,6 +26,8 @@ async fn main() -> Result<()> {
 				act: "connect",
 				token: json_response["wsAuthToken"].as_str().unwrap()
 			}).unwrap().into()).await.expect("Failed to establish connection");
+
+		let mut unserialisables: HashSet<String> = HashSet::new();
 	
 		loop {
 			tokio::select! {
@@ -36,7 +39,12 @@ async fn main() -> Result<()> {
 							if msg.is_text() {
 								match serde_json::from_str(s) as serde_json::Result<message_types::MessageType> {
 									Ok(m) => m.handle_message().await,
-									Err(_) => ()
+									Err(e) => {
+										if !unserialisables.contains(s) {
+											println!("Error deserializing struct \"{}\", Error \"{}\"", s, e);
+											unserialisables.insert(s.to_owned());
+										}
+									}
 								};
 							} else if msg.is_close() {
 								break;
@@ -60,4 +68,28 @@ async fn main() -> Result<()> {
 	}
 
 	Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+	use super::*;
+
+	#[tokio::test]
+    async fn handle_chat_message() {
+        let incoming = r#"{
+            "api2_chat_message": {
+                "text": "This is a test message",
+                "fromUser": {
+                    "avatar": "https://public.onlyfans.com/files/y/yf/yfh/yfhvrttzhvmemj1hforykjvtgpztkzk51579803429/avatar.jpg",
+                    "id": 19526127,
+                    "name": "Mikomi Hokina",
+                    "username": "mikomihokina" } 
+                } 
+            }"#;
+
+        match serde_json::from_str::<message_types::MessageType>(&incoming) {
+            Ok(msg) => msg.handle_message().await,
+            _ => panic!("Did not parse to correct type")
+        }
+    }
 }

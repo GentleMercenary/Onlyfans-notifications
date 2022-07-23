@@ -2,11 +2,10 @@
 
 use super::client;
 
-use tempfile::NamedTempFile;
-use std::{io::Cursor, fs::File, collections::HashMap, time};
+use std::{io::Cursor, fs::File, collections::HashMap, time, path::Path};
 use serde::{Deserialize, Serialize};
 use chrono::{DateTime, offset::Utc};
-use notify_rust::Notification;
+use winrt_notification::{Toast, IconCrop};
 
 #[derive(Serialize)]
 pub struct ConnectMessage<'a> {
@@ -38,7 +37,7 @@ pub struct PostPublishedMessage<'a> {
     user_id: &'a str
 }
 
-#[derive(Deserialize)]
+#[derive(Deserialize, Clone)]
 pub struct User {
     pub avatar: String,
     pub id: i32,
@@ -91,49 +90,58 @@ pub enum MessageType<'a> {
 
 impl<'a> MessageType<'a> {
     pub async fn handle_message(&self) -> () {
-        let s: String;
-        let mut notif_builder = Notification::new();
-        notif_builder.summary("OF Notifier");
+
+        let log = |s: &str| {
+            let sys_time: DateTime<Utc> = time::SystemTime::now().into();
+            println!("[{}] {}", sys_time.format("%d/%m/%Y %T"), s);
+        };
+
+        let handle_non_content = |s: &str| {
+            log(s);
+            Toast::new(Toast::POWERSHELL_APP_ID)
+            .title("OF Notifier")
+            .text1(&s)
+            .show().unwrap();
+        };
+
+        let handle_content = |user: User, content_type: String, content_body: Option<String>| async move {
+            let avatar_path = format!("avatars/{}", user.id);
+            let mut avatar_file = File::create(&avatar_path).unwrap();
+            fetch_avatar(&user.avatar, &mut avatar_file).await;
+
+            let s = format!("New {} from {}", content_type, user.name);
+
+            let mut toast = Toast::new(Toast::POWERSHELL_APP_ID)
+            .title(&s)
+            .icon(&Path::new(env!("CARGO_MANIFEST_DIR")).join(avatar_path), IconCrop::Circular, "avatar");
+
+            if let Some(body) = content_body {
+                toast = toast.text1(&body);
+            }
+            
+            toast.show().unwrap();
+        };
 
         match self {
             Self::Connected(_) => { 
-                s = "Connection established".to_owned();
+                handle_non_content("Connection established");
             },
             Self::Error(msg) =>  {
-                s = format!("Error: {}", &msg.error);
+                handle_non_content(&format!("Error: {}", &msg.error));
             },
             Self::Tagged(TaggedMessageType::PostPublished(msg)) => {
                 let user = get_user(&msg.user_id).await;
-                let mut temp_file = NamedTempFile::new().unwrap();
-                fetch_avatar(&user.avatar, temp_file.as_file_mut()).await;
-    
-                s = format!("New post from {}", user.name);
-                notif_builder.icon(&temp_file.path().to_str().unwrap_or_default());
+                handle_content(user, "post".to_owned(), None).await;
+
             },
             Self::Tagged(TaggedMessageType::Api2ChatMessage(msg)) => {
-                let mut temp_file = NamedTempFile::new().unwrap();
-                fetch_avatar(&msg.from_user.avatar, temp_file.as_file_mut()).await;
-    
-                s = format!("New chat message from {}", msg.from_user.name);
-                notif_builder.icon(&temp_file.path().to_str().unwrap_or_default());
+                handle_content(msg.from_user.to_owned(), "message".to_owned(), Some(msg.text.to_owned())).await;
             },
             Self::Tagged(TaggedMessageType::Stories(msg)) => {
-                let user_id = msg[0].user_id.to_string();
-                let user = get_user(&user_id).await;
-                let mut temp_file = NamedTempFile::new().unwrap();
-                fetch_avatar(&user.avatar, temp_file.as_file_mut()).await;
-    
-                s = format!("New story from {}", user.name);
-                notif_builder.icon(&temp_file.path().to_str().unwrap_or_default());
+                let user = get_user(&msg[0].user_id.to_string()).await;
+                handle_content(user, "story".to_owned(), None).await;
             }
         };
-
-        if !s.is_empty() {
-            let sys_time: DateTime<Utc> = time::SystemTime::now().into();
-            println!("[{}] {}", sys_time.format("%d/%m/%Y %T"), s);
-            notif_builder.body(&s)
-            .show().unwrap();
-        }
     }
 }
 
