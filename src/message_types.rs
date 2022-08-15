@@ -1,228 +1,346 @@
 #![allow(dead_code)]
 
-use super::client;
+use super::client::ClientExt;
 
-use std::{io::Cursor, fs::File, collections::HashMap, time, path::Path};
-use serde::{Deserialize, Serialize};
-use chrono::{DateTime, offset::Utc};
-use winrt_notification::{Toast, IconCrop};
+use strip_markdown::*;
+use reqwest::{Url, Client};
+use chrono::{Utc, DateTime};
+use std::{error, path::Path};
+use notify_rust::Notification;
+use futures_util::future::try_join;
+use futures::future::{try_join_all};
+use filetime::{set_file_mtime, FileTime};
+use serde::{Deserialize, Serialize, Deserializer};
 
-#[derive(Serialize)]
+pub type Error = Box<dyn error::Error + Send + Sync>;
+
+#[derive(Serialize, Debug)]
 pub struct ConnectMessage<'a> {
-    pub act: &'static str,
-    pub token: &'a str
+	pub act: &'static str,
+	pub token: &'a str
 }
 
-#[derive(Serialize)]
+#[derive(Serialize, Debug)]
 pub struct GetOnlinesMessage {
-    pub act: &'static str,
-    pub ids: &'static [&'static str]
+	pub act: &'static str,
+	pub ids: &'static [&'static i32]
 }
 
-#[derive(Deserialize)]
-pub struct ErrorMessage { 
-    error: i32,
-}
-
-#[derive(Deserialize)]
-pub struct ConnectedMessage<'a> { 
-    connected: bool,
-    v: &'a str
-}
-
-#[derive(Deserialize)]
-pub struct PostPublishedMessage<'a> { 
-    id: &'a str,
-    show_posts_in_feed: bool,
-    user_id: &'a str
-}
-
-#[derive(Deserialize, Clone)]
-pub struct User {
-    pub avatar: String,
-    pub id: i32,
-    pub name: String,
-    pub username: String,
-
-    #[serde(flatten)]
-    extra: HashMap<String, serde_json::Value>
-}
-
-#[derive(Deserialize)]
+#[derive(Deserialize, Debug)]
 #[serde(rename_all = "camelCase")]
-pub struct ChatMessage<'a>{
-    pub text: &'a str,
-    pub from_user: User,
-
-    #[serde(flatten)]
-    extra: HashMap<String, serde_json::Value>
+pub struct InitMessage<'a> {
+	pub username: &'a str,
+	pub ws_auth_token: &'a str
 }
 
-#[derive(Deserialize)]
+#[derive(Deserialize, Debug, Clone)]
+pub struct ErrorMessage { 
+	error: u8,
+}
+
+#[derive(Deserialize, Debug)]
+pub struct ConnectedMessage { 
+	connected: bool,
+	v: String
+}
+
+#[derive(Deserialize, Debug)]
+#[serde(rename_all = "snake_case")]
+pub enum MediaTypes {
+	Photo,
+	Video,
+	Gif,
+	Audio
+}
+
+#[derive(Debug)]
+pub struct Media {
+	id: u64,
+	can_view: bool,
+	created_at: DateTime<Utc>,
+	source: Option<String>,
+	preview: Option<String>,
+	media_type: MediaTypes
+}
+
+fn de_markdown_string<'de, D>(deserializer: D) -> Result<String, D::Error> where D: Deserializer<'de> {
+	let s = String::deserialize(deserializer)?;
+	Ok(strip_markdown(&s))
+}
+
+#[derive(Deserialize, Debug)]
+#[serde(rename_all = "camelCase")]
+pub struct Content {
+	id: u32,
+	#[serde(deserialize_with = "de_markdown_string")]
+	text: String,
+	price: Option<f32>,
+	#[serde(deserialize_with = "str_to_date")]
+	posted_at: DateTime<Utc>,
+	#[serde(deserialize_with = "media_from_content")]
+	media: Vec<Media>
+}
+
+fn media_from_content<'de, D>(deserializer: D) -> Result<Vec<Media>, D::Error> where D: Deserializer<'de> {
+	#[derive(Deserialize)]
+	#[serde(rename_all = "camelCase")]
+	struct Outer {
+		id: u64,
+		can_view: bool,
+		#[serde(default = "Utc::now")]
+		#[serde(deserialize_with = "str_to_date")]
+		created_at: DateTime<Utc>,
+		full: Option<String>,
+		preview: Option<String>,
+		#[serde(alias="type")]
+		media_type: MediaTypes
+	}
+
+	<Vec<Outer>>::deserialize(deserializer)
+	.map(|vec| {
+		vec.into_iter().map(|outer| Media {
+			id: outer.id,
+			can_view: outer.can_view,
+			created_at: outer.created_at,
+			source: outer.full,
+			preview: outer.preview,
+			media_type: outer.media_type
+		}).collect()
+	})
+}
+
+fn str_to_date<'de, D>(deserializer: D) -> Result<DateTime<Utc>, D::Error> where D: Deserializer<'de> {
+	let s = String::deserialize(deserializer)?;
+	Ok(DateTime::parse_from_rfc3339(&s).map(|date| date.with_timezone(&Utc)).unwrap())
+}
+
+#[derive(Deserialize, Clone, Debug)]
+#[serde(rename_all = "camelCase")]
+pub struct User {
+	id: u32,
+	name: String,
+	username: String,
+	avatar: String
+}
+
+#[derive(Deserialize, Debug)]
+pub struct PostPublishedMessage { 
+	id: String,
+	user_id: String
+}
+
+#[derive(Deserialize, Debug)]
+#[serde(rename_all = "camelCase")]
+pub struct ChatMessage {
+	#[serde(deserialize_with = "de_markdown_string")]
+	text: String,
+	from_user: User,
+	price: Option<f32>,
+	#[serde(deserialize_with = "media_from_chat")]
+	media: Vec<Media>
+}
+
+fn media_from_chat<'de, D>(deserializer: D) -> Result<Vec<Media>, D::Error> where D: Deserializer<'de> {
+	#[derive(Deserialize)]
+	#[serde(rename_all = "camelCase")]
+	struct Outer {
+		id: u64,
+		can_view: bool,
+		#[serde(default = "Utc::now")]
+		#[serde(deserialize_with = "str_to_date")]
+		created_at: DateTime<Utc>,
+		src: Option<String>,
+		preview: Option<String>,
+		#[serde(alias="type")]
+		media_type: MediaTypes
+	}
+
+	<Vec<Outer>>::deserialize(deserializer)
+	.map(|vec| {
+		vec.into_iter().map(|outer| Media {
+			id: outer.id,
+			can_view: outer.can_view,
+			created_at: outer.created_at,
+			source: outer.src,
+			preview: outer.preview,
+			media_type: outer.media_type
+		}).collect()
+	})
+}
+
+#[derive(Deserialize, Debug)]
 #[serde(rename_all = "camelCase")]
 pub struct StoryMessage {
-    pub id: i32,
-    pub user_id: i32,
-
-    #[serde(flatten)]
-    extra: HashMap<String, serde_json::Value>
+	id: u32,
+	user_id: u32,
+	#[serde(deserialize_with = "media_from_story")]
+	media: Vec<Media>
 }
 
-#[derive(Deserialize)]
+fn media_from_story<'de, D>(deserializer: D) -> Result<Vec<Media>, D::Error> where D: Deserializer<'de> {
+	#[derive(Deserialize)]
+	#[serde(rename_all = "camelCase")]
+	struct Outer {
+		id: u64,
+		can_view: bool,
+		#[serde(default = "Utc::now")]
+		#[serde(deserialize_with = "str_to_date")]
+		created_at: DateTime<Utc>,
+		files: Option<Inner>,
+		#[serde(alias="type")]
+		media_type: MediaTypes
+	}
+
+	#[derive(Deserialize, Clone)]
+	struct Inner {
+		source: Option<UrlInner>,
+		preview: Option<UrlInner>
+	}
+
+	#[derive(Deserialize, Clone)]
+	struct UrlInner {
+		url: Option<String>
+	}
+
+	<Vec<Outer>>::deserialize(deserializer)
+	.map(|vec| {
+		vec.into_iter().map(|outer| Media {
+			id: outer.id,
+			can_view: outer.can_view,
+			created_at: outer.created_at,
+			source: outer.files.clone().and_then(|inner| inner.source).and_then(|source| source.url),
+			preview: outer.files.and_then(|inner| inner.preview).and_then(|preview| preview.url),
+			media_type: outer.media_type
+		}).collect()
+	})
+}
+
+#[derive(Deserialize, Debug)]
 #[serde(rename_all = "snake_case")]
-pub enum TaggedMessageType<'a> {
-    #[serde(borrow)]
-    PostPublished(PostPublishedMessage<'a>),
-    #[serde(borrow)]
-    Api2ChatMessage(ChatMessage<'a>),
-    Stories(Vec<StoryMessage>)
+pub enum TaggedMessageType {
+	PostPublished(PostPublishedMessage),
+	Api2ChatMessage(ChatMessage),
+	Stories(Vec<StoryMessage>)
 }
 
-#[derive(Deserialize)]
+#[derive(Deserialize, Debug)]
 #[serde(untagged)]
-pub enum MessageType<'a> {
-    #[serde(borrow)]
-    Tagged(TaggedMessageType<'a>),
-    #[serde(borrow)]
-    Connected(ConnectedMessage<'a>),
-    Error(ErrorMessage),
+pub enum MessageType {
+	Tagged(TaggedMessageType),
+	Connected(ConnectedMessage),
+	Error(ErrorMessage),
 }
 
-impl<'a> MessageType<'a> {
-    pub async fn handle_message(&self) -> () {
+impl MessageType {
+	async fn download_media(client: &Client, media: &Vec<Media>, path: &Path) -> Result<(), Error> {
+		try_join_all(media.iter().filter_map(|media| {
+			media.source.as_ref().map(|url| async move {
+				client.fetch_file(url, 
+					&path.join(match media.media_type {
+						MediaTypes::Photo => "Images",
+						MediaTypes::Audio => "Audios",
+						MediaTypes::Video | MediaTypes::Gif => "Videos"
+					}),
+					None).await
+					.and_then(|path| {
+						set_file_mtime(path, FileTime::from_unix_time(media.created_at.timestamp(), 0))
+						.map_err(|err| err.into())
+					})
+			})
+		})).await
+		.map(|_| ())
+	}
 
-        let log = |s: &str| {
-            let sys_time: DateTime<Utc> = time::SystemTime::now().into();
-            println!("[{}] {}", sys_time.format("%d/%m/%Y %T"), s);
-        };
+	async fn handle_content(client: &Client, user: &User, content_body: Option<&str>, thumb: Option<&String>) -> Result<(), Error> {
+		let parsed = user.avatar.parse::<Url>()?;
+		let filename = parsed.path_segments()
+			.and_then(|segments|  {
+				let mut reverse_iter = segments.rev();
+				let ext = reverse_iter.next().and_then(|file| file.split('.').last());
+				let filename = reverse_iter.next();
 
-        let handle_non_content = |s: &str| {
-            log(s);
-            Toast::new(Toast::POWERSHELL_APP_ID)
-            .title("OF Notifier")
-            .text1(&s)
-            .show().unwrap();
-        };
+				Option::zip(filename, ext).map(|(filename, ext)| [filename, ext].join("."))
+			}).ok_or("Filename unknown")?;
 
-        let handle_content = |user: User, content_type: String, content_body: Option<String>| async move {
-            let avatar_path = format!("avatars/{}", user.id);
-            let mut avatar_file = File::create(&avatar_path).unwrap();
-            fetch_avatar(&user.avatar, &mut avatar_file).await;
+		let user_path = Path::new(env!("CARGO_MANIFEST_DIR")).join("data").join(&user.username);
+		let avatar = client.fetch_file(&user.avatar, &user_path.join("Profile").join("Avatars"), Some(&filename)).await?;
 
-            let s = format!("New {} from {}", content_type, user.name);
+		info!("Creating notification");
 
-            let mut toast = Toast::new(Toast::POWERSHELL_APP_ID)
-            .title(&s)
-            .icon(&Path::new(env!("CARGO_MANIFEST_DIR")).join(avatar_path), IconCrop::Circular, "avatar");
+		let mut notif = Notification::new();
+		notif.summary(&user.name);
+		notif.icon(avatar.to_str().unwrap_or_default());
+		notif.sound_name("Default");
 
-            if let Some(body) = content_body {
-                toast = toast.text1(&body);
-            }
-            
-            toast.show().unwrap();
-        };
+		if let Some(body) = content_body {
+			notif.body(&body);
+			info!("{body}");
+		}
 
-        match self {
-            Self::Connected(_) => { 
-                handle_non_content("Connection established");
-            },
-            Self::Error(msg) =>  {
-                handle_non_content(&format!("Error: {}", &msg.error));
-            },
-            Self::Tagged(TaggedMessageType::PostPublished(msg)) => {
-                let user = get_user(&msg.user_id).await;
-                handle_content(user, "post".to_owned(), None).await;
+		if let Some(thumb) = thumb {
+			let thumb = client.fetch_file(thumb, &user_path.join("thumbs"), None).await?;
+			notif.image_path(&thumb.to_str().unwrap_or_default());
+		}
 
-            },
-            Self::Tagged(TaggedMessageType::Api2ChatMessage(msg)) => {
-                handle_content(msg.from_user.to_owned(), "message".to_owned(), Some(msg.text.to_owned())).await;
-            },
-            Self::Tagged(TaggedMessageType::Stories(msg)) => {
-                let user = get_user(&msg[0].user_id.to_string()).await;
-                handle_content(user, "story".to_owned(), None).await;
-            }
-        };
-    }
-}
+		notif.show()
+		.map_err(|err| err.into())
+	}
 
-async fn get_user(user_id: &str) -> User {
-    let response = client::get_json(&["https://onlyfans.com/api2/v2/users/list?x[]=", user_id].concat()).await.unwrap();
-    let response_json: serde_json::Value = serde_json::from_str(&response.text().await.unwrap()).unwrap();
-    serde_json::from_value(response_json[user_id].clone()).unwrap()
-}
+	pub async fn handle_message(&self) -> Result<(), Error> {
+		return match self {
+			Self::Connected(_) => {
+				info!("Connect message received");
 
-async fn fetch_avatar(url: &str, file: &mut File) {
-    let image_response = reqwest::get(url).await.unwrap();
-    std::io::copy(&mut Cursor::new(image_response.bytes().await.unwrap()), file).unwrap();
-}
+				Notification::new()
+				.summary("OF Notifier")
+				.body("Connection established")
+				.sound_name("Default")
+				.show()?;
 
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use rand::{Rng, distributions::{Alphanumeric, DistString}};
+				Ok(())
+			},
+			Self::Error(msg) =>  {
+				error!("Error message received: {:?}", msg);
+				Err(format!("websocket received error message with code {}", msg.error).into())
+			},
+			Self::Tagged(tagged) => {
+				let client = Client::with_auth().await?;
 
-    #[test]
-    fn connected_message() {
-        let connected = rand::thread_rng().gen_bool(0.5);
-        let v = Alphanumeric.sample_string(&mut rand::thread_rng(), 16);
+				match tagged {
+					TaggedMessageType::PostPublished(msg) => {
+						info!("Post message received: {:?}", msg);
+		
+						let (user, content) = try_join(client.fetch_user(&msg.user_id), client.fetch_content(&msg.id)).await?;
+						try_join(
+							Self::handle_content(&client, &user, Some(&content.text), content.media.iter().filter_map(|media| media.preview.as_ref()).next()),
+							Self::download_media(&client, &content.media, &Path::new("data").join(&user.username).join("Posts"))
+						).await
+						.map(|_| ())
+					},
+					TaggedMessageType::Api2ChatMessage(msg) => {
+						info!("Chat message received: {:?}", msg);
+		
+						try_join(
+							Self::handle_content(&client, &msg.from_user, Some(&msg.text), msg.media.iter().filter_map(|media| media.preview.as_ref()).next()),
+							Self::download_media(&client, &msg.media, &Path::new("data").join(&msg.from_user.username).join("Messages"))
+						).await
+						.map(|_| ())
+					},
+					TaggedMessageType::Stories(msg) => {
+						info!("Story message received: {:?}", msg);
+		
+						try_join_all(msg.iter().map(|msg| async {
+							let user = client.fetch_user(&msg.user_id.to_string()).await?;
+							try_join(
+								Self::handle_content(&client, &user, None, msg.media.iter().filter_map(|media| media.preview.as_ref()).next()),
+								Self::download_media(&client, &msg.media, &Path::new("data").join(&user.username).join("Stories"))
+							).await
+						})).await
+						.map(|_| ())
+					}
 
-        let incoming = format!("{{\"connected\": {}, \"v\": \"{}\"}}",
-            connected, v);
-
-        match serde_json::from_str::<MessageType>(&incoming).unwrap() {
-            MessageType::Connected(msg) => {
-                assert_eq!(connected, msg.connected);
-                assert_eq!(v, msg.v);
-            }
-            _ => panic!("Did not parse to correct type")
-        }
-    }
-
-    #[test]
-    fn post_published_message() {
-        let id = rand::thread_rng()
-            .gen_range(99999..9999999)
-            .to_string();
-
-        let show_posts = rand::thread_rng().gen_bool(0.5);
-        let user_id = rand::thread_rng()
-            .gen_range(99999..9999999)
-            .to_string();
-
-        let incoming = format!("{{ \"post_published\": {{ \"id\": \"{}\", \"show_posts_in_feed\": {}, \"user_id\": \"{}\" }}}}",
-            id, show_posts, user_id);
-
-        match serde_json::from_str::<MessageType>(&incoming).unwrap() {
-            MessageType::Tagged(TaggedMessageType::PostPublished(msg)) => {
-                assert_eq!(id, msg.id);
-                assert_eq!(show_posts, msg.show_posts_in_feed);
-                assert_eq!(user_id, msg.user_id);
-            }
-            _ => panic!("Did not parse to correct type")
-        }
-    }
-
-    #[test]
-    fn chat_message() {
-        let text = Alphanumeric.sample_string(&mut rand::thread_rng(), 16);
-        let avatar = Alphanumeric.sample_string(&mut rand::thread_rng(), 16);
-        let id = rand::thread_rng().gen_range(9999..999999);
-        let name = Alphanumeric.sample_string(&mut rand::thread_rng(), 16);
-        let username = Alphanumeric.sample_string(&mut rand::thread_rng(), 16);
-
-        let incoming = format!("{{ \"api2_chat_message\": {{ \"text\": \"{}\", \"fromUser\": {{ \"avatar\": \"{}\", \"id\": {}, \"name\": \"{}\", \"username\": \"{}\" }} }} }}",
-            text, avatar, id, name, username);
-
-        match serde_json::from_str::<MessageType>(&incoming).unwrap() {
-            MessageType::Tagged(TaggedMessageType::Api2ChatMessage(msg)) => {
-                assert_eq!(text, msg.text);
-                assert_eq!(avatar, msg.from_user.avatar);
-                assert_eq!(id, msg.from_user.id);
-                assert_eq!(name, msg.from_user.name);
-                assert_eq!(username, msg.from_user.username);
-            }
-            _ => panic!("Did not parse to correct type")
-        }
-    }
-
+				}
+			}
+		};
+	}
 }

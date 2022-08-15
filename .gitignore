@@ -1,6 +1,7 @@
+Cargo.lock
 /target
 /.vscode
 auth.json
 log.txt
-Cargo.lock
-avatars
+/data
+/logs
