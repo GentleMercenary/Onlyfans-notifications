@@ -1,9 +1,9 @@
 use super::message_types::{self, Error};
 
+use futures_util::{SinkExt, StreamExt};
 use std::time::Duration;
-use futures_util::{StreamExt, SinkExt};
 use tokio::{net::TcpStream, time::sleep};
-use tokio_tungstenite::{connect_async, WebSocketStream, MaybeTlsStream};
+use tokio_tungstenite::{connect_async, MaybeTlsStream, WebSocketStream};
 
 pub struct WebSocketClient {
 	socket: Option<WebSocketStream<MaybeTlsStream<TcpStream>>>,
@@ -14,11 +14,10 @@ impl WebSocketClient {
 	pub fn new() -> Result<Self, Error> {
 		Ok(Self {
 			socket: None,
-			heartbeat: serde_json::to_string(
-				&message_types::GetOnlinesMessage {
-					act: "get_onlines",
-					ids: &[]
-				})?
+			heartbeat: serde_json::to_string(&message_types::GetOnlinesMessage {
+				act: "get_onlines",
+				ids: &[],
+			})?,
 		})
 	}
 
@@ -39,11 +38,15 @@ impl WebSocketClient {
 		if let Some(socket) = self.socket.as_mut() {
 			info!("Sending connect message");
 
-			socket.send(serde_json::to_string(
-					&message_types::ConnectMessage {
+			socket
+				.send(
+					serde_json::to_string(&message_types::ConnectMessage {
 						act: "connect",
-						token
-					})?.into()).await?;
+						token,
+					})?
+					.into(),
+				)
+				.await?;
 
 			let timeout = sleep(Duration::from_secs(30));
 			tokio::pin!(timeout);
@@ -106,17 +109,17 @@ impl WebSocketClient {
 
 	async fn wait_for_message(&mut self) -> Result<message_types::MessageType, Error> {
 		let reader = self.socket.as_mut().unwrap();
-		reader.next().await.ok_or("Message queue exhausted".into())
-		.and_then(|m| m.map(|msg| msg.to_string()).map_err(|err| err.into()) )
-		.and_then(|s| {
-			if s == "{\"online\":[]}" {
-				return Err("".into());
-			}
+		reader
+			.next()
+			.await
+			.ok_or("Message queue exhausted".into())
+			.and_then(|m| m.map(|msg| msg.to_string()).map_err(|err| err.into()))
+			.and_then(|s| {
+				if s == "{\"online\":[]}" {
+					return Err("".into());
+				}
 
-			serde_json::from_str::<message_types::MessageType>(&s).map_err(|err| {
-				err.into()
+				serde_json::from_str::<message_types::MessageType>(&s).map_err(|err| err.into())
 			})
-		})
 	}
-
 }
