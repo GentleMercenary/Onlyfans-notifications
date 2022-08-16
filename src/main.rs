@@ -167,10 +167,14 @@ async fn main() -> Result<(), Box<dyn error::Error>> {
 
 #[cfg(test)]
 mod tests {
+use simplelog::{TermLogger, TerminalMode, ColorChoice};
+
 use super::*;
 
 	#[tokio::test]
     async fn test_chat_message() {
+		TermLogger::init(LevelFilter::Info, Config::default(), TerminalMode::Mixed, ColorChoice::Auto).unwrap();
+
         let incoming = r#"{
             "api2_chat_message": {
                 "text": "This is a message<br />\n to test <a href = \"/onlyfans\">MARKDOWN parsing</a> 👌<br />\n in notifications 💯",
@@ -200,6 +204,8 @@ use super::*;
 
 	#[tokio::test]
     async fn test_post_message() {
+		TermLogger::init(LevelFilter::Info, Config::default(), TerminalMode::Mixed, ColorChoice::Auto).unwrap();
+
 		// Onlyfan april fools post
         let incoming = r#"{
             "post_published": {
@@ -216,6 +222,8 @@ use super::*;
 
 	#[tokio::test]
     async fn test_story_message() {
+		TermLogger::init(LevelFilter::Info, Config::default(), TerminalMode::Mixed, ColorChoice::Auto).unwrap();
+		
         let incoming = r#"{
             "stories": [
 				{
