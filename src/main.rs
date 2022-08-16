@@ -1,4 +1,4 @@
-#![windows_subsystem = "windows"]
+// #![windows_subsystem = "windows"]
 #![feature(result_option_inspect)]
 
 mod message_types;
@@ -9,17 +9,21 @@ use crate::client::ClientExt;
 #[macro_use] extern crate log;
 extern crate simplelog;
 
+use cached::lazy_static::lazy_static;
 use chrono::Local;
 use reqwest::Client;
 use futures::TryFutureExt;
 use tokio::{task, select};
-use notify_rust::Notification;
+use winrt_toast::{ToastManager, Toast};
 use tokio_util::sync::CancellationToken;
 use simplelog::{WriteLogger, Config, LevelFilter};
 use trayicon::{Icon, TrayIconBuilder, MenuBuilder};
 use std::{fs::{File, self}, error, sync::Arc, path::Path};
 use winit::{event_loop::{EventLoop, ControlFlow, EventLoopProxy}, event::Event};
 
+lazy_static! {
+	static ref MANAGER: ToastManager = ToastManager::new("{1AC14E77-02E7-4E5D-B744-2EB1AE5198B7}\\WindowsPowerShell\\v1.0\\powershell.exe");
+}
 
 fn spawn_connection_thread(proxy: EventLoopProxy<Events>, cancel_token: Arc<CancellationToken>) {
 	info!("Spawning websocket thread");
@@ -27,11 +31,14 @@ fn spawn_connection_thread(proxy: EventLoopProxy<Events>, cancel_token: Arc<Canc
 	task::spawn(async move {
 		fn on_error(err: Box<dyn error::Error + Send + Sync>) {
 			error!("Termination caused by: {:?}", err);
-			Notification::new()
-			.summary("OF Notifier")
-			.body("An error occurred, disconnecting")
-			.sound_name("Default")
-			.show().unwrap();
+
+			let mut toast = Toast::new();
+			toast
+			.text1("OF Notifier")
+			.text2("An error occurred, disconnecting");
+
+			MANAGER.show(&toast).unwrap();
+		
 		}
 
 		let auth_link: &str = "https://onlyfans.com/api2/v2/users/me";
@@ -98,11 +105,11 @@ async fn main() -> Result<(), Box<dyn error::Error>> {
 
 	let event_loop = EventLoop::<Events>::with_user_event();
 	let proxy = event_loop.create_proxy();
-    let icon = include_bytes!("../res/icon.ico");
-    let icon2 = include_bytes!("../res/icon2.ico");
+	let icon = include_bytes!("../res/icon.ico");
+	let icon2 = include_bytes!("../res/icon2.ico");
 
-    let first_icon = Icon::from_buffer(icon, None, None)?;
-    let second_icon = Icon::from_buffer(icon2, None, None)?;
+	let first_icon = Icon::from_buffer(icon, None, None)?;
+	let second_icon = Icon::from_buffer(icon2, None, None)?;
 
 	let mut tray_icon = TrayIconBuilder::new()
 	.sender_winit(proxy.clone())
