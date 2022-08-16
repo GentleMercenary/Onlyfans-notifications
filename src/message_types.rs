@@ -8,11 +8,12 @@ use strip_markdown::*;
 use reqwest::{Url, Client};
 use chrono::{Utc, DateTime};
 use std::{error, path::Path};
+use async_trait::async_trait;
 use futures_util::future::try_join;
 use futures::future::{try_join_all};
 use filetime::{set_file_mtime, FileTime};
 use serde::{Deserialize, Serialize, Deserializer};
-use winrt_toast::{Toast, Header, Image, content::image::{ImageHintCrop, ImagePlacement}};
+use winrt_toast::{Toast, Header, Image, content::{image::{ImageHintCrop, ImagePlacement}, text::TextPlacement}, Text};
 
 pub type Error = Box<dyn error::Error + Send + Sync>;
 
@@ -217,6 +218,77 @@ fn media_from_story<'de, D>(deserializer: D) -> Result<Vec<Media>, D::Error> whe
 	})
 }
 
+#[async_trait]
+trait _Toast {
+	async fn toast(&self, client: &Client, user_path: &Path) -> Result<Toast, Error>;
+}
+
+#[async_trait]
+impl _Toast for Content {
+	async fn toast(&self, client: &Client, user_path: &Path) -> Result<Toast, Error> {
+		let mut toast = Toast::new();
+		toast
+		.header(Header::new("Posts", "Posts", "Posts"))
+		.text2(self.text.clone());
+
+		info!("{}", self.text);
+
+		if let Some(price) = self.price {
+			toast.text3(Text::new(format!("${:.2}", price))
+				.with_placement(TextPlacement::Attribution));
+		}
+
+		if let Some(thumb) = self.media.iter().filter_map(|media| media.preview.as_deref()).next() {
+			let thumb = client.fetch_file(thumb, &user_path.join("thumbs"), None).await?;
+			toast.image(2, Image::new_local(thumb)?);
+		}
+
+		Ok(toast)
+	}
+}
+
+#[async_trait]
+impl _Toast for ChatMessage {
+	async fn toast(&self, client: &Client, user_path: &Path) -> Result<Toast, Error> {
+		let mut toast = Toast::new();
+		toast
+		.header(Header::new("Message", "Message", "Message"))
+		.text2(self.text.clone());
+
+		info!("{}", self.text);
+
+		println!("{:?}", self.price);
+
+		if let Some(price) = self.price {
+			toast.text3(Text::new(format!("${:.2}", price))
+				.with_placement(TextPlacement::Attribution));
+		}
+
+		if let Some(thumb) = self.media.iter().filter_map(|media| media.preview.as_deref()).next() {
+			let thumb = client.fetch_file(thumb, &user_path.join("thumbs"), None).await?;
+			toast.image(2, Image::new_local(thumb)?);
+		}
+
+		Ok(toast)
+	}
+}
+
+#[async_trait]
+impl _Toast for StoryMessage {
+	async fn toast(&self, client: &Client, user_path: &Path) -> Result<Toast, Error> {
+		let mut toast = Toast::new();
+		toast.header(Header::new("Stories", "Stories", "Stories"));
+
+		if let Some(thumb) = self.media.iter().filter_map(|media| media.preview.as_deref()).next() {
+			let thumb = client.fetch_file(thumb, &user_path.join("thumbs"), None).await?;
+			toast.image(2, Image::new_local(thumb)?);
+		}
+
+		Ok(toast)
+	}
+}
+
+
 #[derive(Deserialize, Debug)]
 #[serde(rename_all = "snake_case")]
 pub enum TaggedMessageType {
@@ -253,7 +325,7 @@ impl MessageType {
 		.map(|_| ())
 	}
 
-	async fn handle_content(client: &Client, user: &User, content_type: &str, content_body: Option<&str>, thumb: Option<&str>) -> Result<(), Error> {
+	async fn handle_content(client: &Client, user: &User, content: &impl _Toast) -> Result<(), Error> {
 		let parsed = user.avatar.parse::<Url>()?;
 		let filename = parsed.path_segments()
 			.and_then(|segments|  {
@@ -268,26 +340,14 @@ impl MessageType {
 		let avatar = client.fetch_file(&user.avatar, &user_path.join("Profile").join("Avatars"), Some(&filename)).await?;
 
 		info!("Creating notification");
-
-		let mut toast = Toast::new();
+		let mut toast = content.toast(client, &user_path).await?;
 		toast
-		.header(Header::new(content_type, content_type, content_type))
 		.text1(&user.name)
-		.image(0, 
+		.image(1, 
 			Image::new_local(avatar)?
 			.with_hint_crop(ImageHintCrop::Circle)
 			.with_placement(ImagePlacement::AppLogoOverride)
 		);
-
-		if let Some(body) = content_body {
-			toast.text2(body);
-			info!("{body}");
-		}
-
-		if let Some(thumb) = thumb {
-			let thumb = client.fetch_file(thumb, &user_path.join("thumbs"), None).await?;
-			toast.image(1, Image::new_local(thumb)?);
-		}
 
 		MANAGER.show(&toast)?;
 		// TODO callbacks?
@@ -319,33 +379,30 @@ impl MessageType {
 					TaggedMessageType::PostPublished(msg) => {
 						info!("Post message received: {:?}", msg);
 		
-						let content_type = "Posts";
 						let (user, content) = try_join(client.fetch_user(&msg.user_id), client.fetch_content(&msg.id)).await?;
 						try_join(
-							Self::handle_content(&client, &user, content_type, Some(&content.text), content.media.iter().filter_map(|media| media.preview.as_deref()).next()),
-							Self::download_media(&client, &content.media, &Path::new("data").join(&user.username).join(content_type))
+							Self::handle_content(&client, &user, &content),
+							Self::download_media(&client, &content.media, &Path::new("data").join(&user.username).join("Posts"))
 						).await
 						.map(|_| ())
 					},
 					TaggedMessageType::Api2ChatMessage(msg) => {
 						info!("Chat message received: {:?}", msg);
 		
-						let content_type = "Messages";
 						try_join(
-							Self::handle_content(&client, &msg.from_user, content_type, Some(&msg.text), msg.media.iter().filter_map(|media| media.preview.as_deref()).next()),
-							Self::download_media(&client, &msg.media, &Path::new("data").join(&msg.from_user.username).join(content_type))
+							Self::handle_content(&client, &msg.from_user, msg),
+							Self::download_media(&client, &msg.media, &Path::new("data").join(&msg.from_user.username).join("Messages"))
 						).await
 						.map(|_| ())
 					},
 					TaggedMessageType::Stories(msg) => {
 						info!("Story message received: {:?}", msg);
 		
-						let content_type = "Stories";
 						try_join_all(msg.iter().map(|msg| async {
 							let user = client.fetch_user(&msg.user_id.to_string()).await?;
 							try_join(
-								Self::handle_content(&client, &user, content_type, None, msg.media.iter().filter_map(|media| media.preview.as_deref()).next()),
-								Self::download_media(&client, &msg.media, &Path::new("data").join(&user.username).join(content_type))
+								Self::handle_content(&client, &user, msg),
+								Self::download_media(&client, &msg.media, &Path::new("data").join(&user.username).join("Stories"))
 							).await
 						})).await
 						.map(|_| ())

@@ -1,4 +1,4 @@
-// #![windows_subsystem = "windows"]
+#![windows_subsystem = "windows"]
 #![feature(result_option_inspect)]
 
 mod message_types;
@@ -174,14 +174,14 @@ use super::*;
         let incoming = r#"{
             "api2_chat_message": {
                 "text": "This is a message<br />\n to test <a href = \"/onlyfans\">MARKDOWN parsing</a> 👌<br />\n in notifications 💯",
+				"price": 3.99,
                 "fromUser": {
                     "avatar": "https://public.onlyfans.com/files/m/mk/mka/mkamcrf6rjmcwo0jj4zoavhmalzohe5a1640180203/avatar.jpg",
                     "id": 15585607,
                     "name": "OnlyFans",
-                    "username": "onlyfans",
-					"price": 3.99
+                    "username": "onlyfans"
 				},
-				"media":[
+				"media": [
 					{
 						"id": 0,
 						"canView": true,
