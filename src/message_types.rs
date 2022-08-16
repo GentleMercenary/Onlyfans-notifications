@@ -7,7 +7,7 @@ use super::client::ClientExt;
 use strip_markdown::*;
 use reqwest::{Url, Client};
 use chrono::{Utc, DateTime};
-use std::{error, path::Path};
+use std::{error, path::Path, process::Command};
 use async_trait::async_trait;
 use futures_util::future::try_join;
 use futures::future::{try_join_all};
@@ -226,9 +226,12 @@ trait _Toast {
 #[async_trait]
 impl _Toast for Content {
 	async fn toast(&self, client: &Client, user_path: &Path) -> Result<Toast, Error> {
+		let content_type = "Posts";
+
 		let mut toast = Toast::new();
 		toast
-		.header(Header::new("Posts", "Posts", "Posts"))
+		.header(Header::new(content_type, content_type, content_type))
+		.launch(user_path.join(content_type).to_str().unwrap())
 		.text2(self.text.clone());
 
 		info!("{}", self.text);
@@ -250,14 +253,15 @@ impl _Toast for Content {
 #[async_trait]
 impl _Toast for ChatMessage {
 	async fn toast(&self, client: &Client, user_path: &Path) -> Result<Toast, Error> {
+		let content_type = "Messages";
+
 		let mut toast = Toast::new();
 		toast
-		.header(Header::new("Message", "Message", "Message"))
+		.header(Header::new(content_type, content_type, content_type))
+		.launch(user_path.join(content_type).to_str().unwrap())
 		.text2(self.text.clone());
 
 		info!("{}", self.text);
-
-		println!("{:?}", self.price);
 
 		if let Some(price) = self.price {
 			toast.text3(Text::new(format!("${:.2}", price))
@@ -276,8 +280,12 @@ impl _Toast for ChatMessage {
 #[async_trait]
 impl _Toast for StoryMessage {
 	async fn toast(&self, client: &Client, user_path: &Path) -> Result<Toast, Error> {
+		let content_type = "Stories";
+
 		let mut toast = Toast::new();
-		toast.header(Header::new("Stories", "Stories", "Stories"));
+		toast
+		.header(Header::new(content_type, content_type, content_type))
+		.launch(user_path.join(content_type).to_str().unwrap());
 
 		if let Some(thumb) = self.media.iter().filter_map(|media| media.preview.as_deref()).next() {
 			let thumb = client.fetch_file(thumb, &user_path.join("thumbs"), None).await?;
@@ -349,10 +357,18 @@ impl MessageType {
 			.with_placement(ImagePlacement::AppLogoOverride)
 		);
 
-		MANAGER.show(&toast)?;
-		// TODO callbacks?
-
-		Ok(())
+		MANAGER.show_with_callbacks(&toast,
+			Some(Box::new(move |rs| { 
+				if let Ok(s) = rs {
+					Command::new("explorer")
+					.arg(s)
+					.spawn()
+					.unwrap();
+				}
+			})),
+			None,
+			Some(Box::new(move |e| { error!("Could't show notification: {:?}", e); })))
+		.map_err(|err| err.into())
 	}
 
 	pub async fn handle_message(&self) -> Result<(), Error> {
