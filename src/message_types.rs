@@ -236,7 +236,7 @@ impl _Toast for Content {
 
 		info!("{}", self.text);
 
-		if let Some(price) = self.price {
+		if let Some(price) = self.price && price > 0f32 {
 			toast.text3(Text::new(format!("${:.2}", price))
 				.with_placement(TextPlacement::Attribution));
 		}
@@ -263,7 +263,7 @@ impl _Toast for ChatMessage {
 
 		info!("{}", self.text);
 
-		if let Some(price) = self.price {
+		if let Some(price) = self.price && price > 0f32 {
 			toast.text3(Text::new(format!("${:.2}", price))
 				.with_placement(TextPlacement::Attribution));
 		}
@@ -344,7 +344,7 @@ impl MessageType {
 				Option::zip(filename, ext).map(|(filename, ext)| [filename, ext].join("."))
 			}).ok_or("Filename unknown")?;
 
-		let user_path = Path::new(env!("CARGO_MANIFEST_DIR")).join("data").join(&user.username);
+		let user_path = Path::new("data").join(&user.username).canonicalize()?;
 		let avatar = client.fetch_file(&user.avatar, &user_path.join("Profile").join("Avatars"), Some(&filename)).await?;
 
 		info!("Creating notification");
