@@ -15,6 +15,7 @@ use std::{
 	sync::Arc,
 	time::{Duration, SystemTime, UNIX_EPOCH},
 };
+use tokio_retry::{strategy::ExponentialBackoff, Retry};
 
 #[derive(Clone)]
 pub struct Cookie {
@@ -86,10 +87,12 @@ async fn get_params() -> Result<(StaticParams, AuthParams), Error> {
 				"https://raw.githubusercontent.com/DATAHOARDERS/dynamic-rules/main/onlyfans.json",
 			)
 			.and_then(|response| response.text())
+			.inspect_err(|err| error!("{err:?}"))
 			.await?,
 		)?,
 		fs::read_to_string("auth.json").and_then(|data| {
 			serde_json::from_str::<_AuthParams>(&data)
+				.inspect_err(|err| error!("{err:?}"))
 				.map(|outer| outer.auth)
 				.map_err(|err| err.into())
 		})?,
@@ -99,6 +102,7 @@ async fn get_params() -> Result<(StaticParams, AuthParams), Error> {
 #[async_trait]
 pub trait ClientExt {
 	async fn with_auth() -> Result<Client, Error>;
+	async fn ifetch(&self, link: &str) -> Result<Response, Error>;
 	async fn fetch(&self, link: &str) -> Result<Response, Error>;
 	async fn fetch_user(&self, user_id: &str) -> Result<message_types::User, Error>;
 	async fn fetch_content(&self, post_id: &str) -> Result<message_types::Content, Error>;
@@ -154,7 +158,7 @@ impl ClientExt for Client {
 			.map_err(|err| err.into())
 	}
 
-	async fn fetch(&self, link: &str) -> Result<Response, Error> {
+	async fn ifetch(&self, link: &str) -> Result<Response, Error> {
 		let (static_params, auth_params) = get_params().await?;
 
 		let mut headers: header::HeaderMap = header::HeaderMap::new();
@@ -213,8 +217,20 @@ impl ClientExt for Client {
 			.map_err(|err| err.into())
 	}
 
+	async fn fetch(&self, link: &str) -> Result<Response, Error> {
+		Retry::spawn(
+			ExponentialBackoff::from_millis(5000).take(5),
+			|| async move { self.ifetch(link).await },
+		)
+		.await
+	}
+
 	async fn fetch_user(&self, user_id: &str) -> Result<message_types::User, Error> {
 		self.fetch(&format!("https://onlyfans.com/api2/v2/users/{}", user_id))
+			.and_then(|response| async move {
+				futures::future::ready(response.error_for_status().map_err(|err| err.into())).await
+			})
+			.inspect_err(|err| error!("{err:?}"))
 			.and_then(|response| async move { response.text().await.map_err(|err| err.into()) })
 			.and_then(|response| async move {
 				serde_json::from_str(&response).map_err(|err| err.into())
@@ -228,6 +244,10 @@ impl ClientExt for Client {
 			"https://onlyfans.com/api2/v2/posts/{}?skip_users=all",
 			post_id
 		))
+		.and_then(|response| async move {
+			futures::future::ready(response.error_for_status().map_err(|err| err.into())).await
+		})
+		.inspect_err(|err| error!("{err:?}"))
 		.and_then(|response| async move { response.text().await.map_err(|err| err.into()) })
 		.and_then(
 			|response| async move { serde_json::from_str(&response).map_err(|err| err.into()) },
@@ -258,6 +278,11 @@ impl ClientExt for Client {
 			let mut f = File::create(&full_path)?;
 
 			self.fetch(&url)
+				.and_then(|response| async move {
+					futures::future::ready(response.error_for_status().map_err(|err| err.into()))
+						.await
+				})
+				.inspect_err(|err| error!("{err:?}"))
 				.and_then(
 					|response| async move { response.bytes().await.map_err(|err| err.into()) },
 				)
