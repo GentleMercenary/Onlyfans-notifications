@@ -129,8 +129,8 @@ fn str_to_date<'de, D>(deserializer: D) -> Result<DateTime<Utc>, D::Error>
 where
 	D: Deserializer<'de>,
 {
-	let s = String::deserialize(deserializer)?;
-	Ok(DateTime::parse_from_rfc3339(&s)
+	let s: &str = Deserialize::deserialize(deserializer)?;
+	Ok(DateTime::parse_from_rfc3339(s)
 		.map(|date| date.with_timezone(&Utc))
 		.unwrap())
 }
@@ -416,7 +416,8 @@ impl MessageType {
 			})
 			.ok_or("Filename unknown")?;
 
-		let user_path = Path::new("data").join(&user.username).canonicalize()?;
+		let user_path = Path::new("data").join(&user.username);
+
 		let avatar = client
 			.fetch_file(
 				&user.avatar,
@@ -435,6 +436,7 @@ impl MessageType {
 		);
 
 		MANAGER
+			.wait()
 			.show_with_callbacks(
 				&toast,
 				Some(Box::new(move |rs| {
@@ -458,7 +460,7 @@ impl MessageType {
 				let mut toast = Toast::new();
 				toast.text1("OF Notifier").text2("Connection established");
 
-				MANAGER.show(&toast)?;
+				MANAGER.wait().show(&toast)?;
 				Ok(())
 			}
 			Self::Error(msg) => {

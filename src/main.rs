@@ -4,13 +4,14 @@
 mod client;
 mod message_types;
 mod websocket_client;
-use crate::client::ClientExt;
+use client::ClientExt;
+use message_types::Error;
 
 #[macro_use]
 extern crate log;
 extern crate simplelog;
 
-use cached::lazy_static::lazy_static;
+use cached::once_cell::sync::OnceCell;
 use chrono::Local;
 use futures::TryFutureExt;
 use reqwest::Client;
@@ -28,19 +29,25 @@ use winit::{
 	event::Event,
 	event_loop::{ControlFlow, EventLoop, EventLoopProxy},
 };
-use winrt_toast::{Toast, ToastManager};
+use winrt_toast::{register, Toast, ToastManager};
 
-lazy_static! {
-	static ref MANAGER: ToastManager = ToastManager::new(
-		"{1AC14E77-02E7-4E5D-B744-2EB1AE5198B7}\\WindowsPowerShell\\v1.0\\powershell.exe"
-	);
+static MANAGER: OnceCell<ToastManager> = OnceCell::new();
+
+fn register_app() -> Result<(), Box<dyn error::Error>> {
+	let aum_id = "OFNotifier";
+	let icon_path = Path::new("res").join("icon.ico").canonicalize()?; // Doesn't work for some reason
+	register(aum_id, "OF noitifier", Some(icon_path.as_path()))?;
+	MANAGER
+		.set(ToastManager::new(aum_id))
+		.expect("Global toast manager set");
+	Ok(())
 }
 
 fn spawn_connection_thread(proxy: EventLoopProxy<Events>, cancel_token: Arc<CancellationToken>) {
 	info!("Spawning websocket thread");
 	let cloned_proxy = proxy.clone();
 	task::spawn(async move {
-		fn on_error(err: Box<dyn error::Error + Send + Sync>) {
+		fn on_error(err: Error) {
 			error!("Termination caused by: {:?}", err);
 
 			let mut toast = Toast::new();
@@ -48,7 +55,7 @@ fn spawn_connection_thread(proxy: EventLoopProxy<Events>, cancel_token: Arc<Canc
 				.text1("OF Notifier")
 				.text2("An error occurred, disconnecting");
 
-			MANAGER.show(&toast).unwrap();
+			MANAGER.wait().show(&toast).unwrap();
 		}
 
 		let auth_link: &str = "https://onlyfans.com/api2/v2/users/me";
@@ -109,6 +116,8 @@ enum Events {
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn error::Error>> {
+	register_app()?;
+
 	fs::create_dir_all(&Path::new("logs"))?;
 	let mut log_path = Path::new("logs").join(Local::now().format("%Y%m%d_%H%M%S").to_string());
 	log_path.set_extension(".log");
@@ -186,6 +195,8 @@ mod tests {
 
 	#[tokio::test]
 	async fn test_chat_message() {
+		register_app().unwrap();
+
 		TermLogger::init(
 			LevelFilter::Info,
 			Config::default(),
@@ -219,15 +230,15 @@ mod tests {
 		let msg = serde_json::from_str::<message_types::MessageType>(&incoming).unwrap();
 		assert!(matches!(
 			msg,
-			message_types::MessageType::Tagged(message_types::TaggedMessageType::Api2ChatMessage(
-				_
-			))
+			message_types::MessageType::Tagged(message_types::TaggedMessageType::Api2ChatMessage(_))
 		));
 		msg.handle_message().await.unwrap();
 	}
 
 	#[tokio::test]
 	async fn test_post_message() {
+		register_app().unwrap();
+
 		TermLogger::init(
 			LevelFilter::Info,
 			Config::default(),
@@ -255,6 +266,8 @@ mod tests {
 
 	#[tokio::test]
 	async fn test_story_message() {
+		register_app().unwrap();
+
 		TermLogger::init(
 			LevelFilter::Info,
 			Config::default(),
