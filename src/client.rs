@@ -37,7 +37,7 @@ fn parse_cookie<'de, D>(deserializer: D) -> Result<Cookie, D::Error>
 where
 	D: Deserializer<'de>,
 {
-	let s = String::deserialize(deserializer)?;
+	let s: &str = Deserialize::deserialize(deserializer)?;
 	let mut cookie_map: HashMap<&str, &str> = HashMap::new();
 	let filtered_str = s.replace(';', "");
 	for c in filtered_str.split(' ') {
