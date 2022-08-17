@@ -416,7 +416,9 @@ impl MessageType {
 			})
 			.ok_or("Filename unknown")?;
 
-		let user_path = Path::new("data").join(&user.username);
+		let mut user_path = Path::new("data").join(&user.username);
+		std::fs::create_dir_all(&user_path)?;
+		user_path = user_path.canonicalize()?;
 
 		let avatar = client
 			.fetch_file(
