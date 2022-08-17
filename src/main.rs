@@ -198,7 +198,7 @@ mod tests {
 		register_app().unwrap();
 
 		TermLogger::init(
-			LevelFilter::Info,
+			LevelFilter::Debug,
 			Config::default(),
 			TerminalMode::Mixed,
 			ColorChoice::Auto,
@@ -240,7 +240,7 @@ mod tests {
 		register_app().unwrap();
 
 		TermLogger::init(
-			LevelFilter::Info,
+			LevelFilter::Debug,
 			Config::default(),
 			TerminalMode::Mixed,
 			ColorChoice::Auto,
@@ -269,7 +269,7 @@ mod tests {
 		register_app().unwrap();
 
 		TermLogger::init(
-			LevelFilter::Info,
+			LevelFilter::Debug,
 			Config::default(),
 			TerminalMode::Mixed,
 			ColorChoice::Auto,
