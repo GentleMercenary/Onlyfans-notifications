@@ -90,7 +90,9 @@ async fn get_params() -> Result<(StaticParams, AuthParams), Error> {
 			.inspect_err(|err| error!("{err:?}"))
 			.await?,
 		)?,
-		fs::read_to_string("auth.json").and_then(|data| {
+		fs::read_to_string("auth.json")
+		.inspect_err(|err| error!("{err:?}"))
+		.and_then(|data| {
 			serde_json::from_str::<_AuthParams>(&data)
 				.inspect_err(|err| error!("{err:?}"))
 				.map(|outer| outer.auth)
@@ -214,6 +216,7 @@ impl ClientExt for Client {
 			.headers(headers)
 			.send()
 			.await
+			.and_then(|response| response.error_for_status())
 			.map_err(|err| err.into())
 	}
 
@@ -278,11 +281,6 @@ impl ClientExt for Client {
 			let mut f = File::create(&full_path)?;
 
 			self.fetch(&url)
-				.and_then(|response| async move {
-					futures::future::ready(response.error_for_status().map_err(|err| err.into()))
-						.await
-				})
-				.inspect_err(|err| error!("{err:?}"))
 				.and_then(
 					|response| async move { response.bytes().await.map_err(|err| err.into()) },
 				)
