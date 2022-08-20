@@ -17,7 +17,7 @@ use std::{
 };
 use tokio_retry::{strategy::ExponentialBackoff, Retry};
 
-#[derive(Clone)]
+#[derive(Clone, Debug)]
 pub struct Cookie {
 	pub auth_id: String,
 	sess: String,
@@ -42,8 +42,11 @@ where
 	let mut cookie_map: HashMap<&str, &str> = HashMap::new();
 	let filtered_str = s.replace(';', "");
 	for c in filtered_str.split(' ') {
-		let split_cookie: Vec<&str> = c.split('=').collect();
-		cookie_map.insert(split_cookie[0], split_cookie[1]);
+		let mut split_cookie = c.split('=');
+		cookie_map.insert(
+			split_cookie.next().unwrap(),
+			split_cookie.next().unwrap()
+		);
 	}
 
 	Ok(Cookie {
@@ -53,7 +56,7 @@ where
 	})
 }
 
-#[derive(Deserialize, Clone)]
+#[derive(Deserialize, Clone, Debug)]
 struct StaticParams {
 	static_param: String,
 	format: String,
@@ -66,12 +69,12 @@ struct StaticParams {
 	// message: String
 }
 
-#[derive(Deserialize, Clone)]
+#[derive(Deserialize, Clone, Debug)]
 struct _AuthParams {
 	auth: AuthParams,
 }
 
-#[derive(Deserialize, Clone)]
+#[derive(Deserialize, Clone, Debug)]
 struct AuthParams {
 	#[serde(deserialize_with = "parse_cookie")]
 	cookie: Cookie,
@@ -86,9 +89,9 @@ async fn get_params() -> Result<(StaticParams, AuthParams), Error> {
 			"https://raw.githubusercontent.com/DATAHOARDERS/dynamic-rules/ca6e357cbd24115d954827b3dde6a49a774f578a/onlyfans.json",
 		)
 		.and_then(|response| response.text()).await
-		.inspect(|s| debug!("{s}"))
 		.and_then(|data| {
 			Ok(serde_json::from_str::<StaticParams>(&data)
+			.inspect(|params| debug!("{params:?}"))
 			.inspect_err(|err| error!("{err:?}")))
 		})??,
 		fs::read_to_string("auth.json")
@@ -97,6 +100,7 @@ async fn get_params() -> Result<(StaticParams, AuthParams), Error> {
 			serde_json::from_str::<_AuthParams>(&data)
 				.inspect_err(|err| error!("{err:?}"))
 				.map(|outer| outer.auth)
+				.inspect(|params| debug!("{params:?}"))
 				.map_err(|err| err.into())
 		})?,
 	))
