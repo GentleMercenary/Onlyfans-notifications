@@ -1,5 +1,5 @@
 # OF-notifier
-A tray application for Windows that gives you push notifications for new posts, messages and stories posted by models you subscribe to on Onlyfans.
+A tray application for Windows that gives you push notifications and instant downloads of new posts, messages and stories posted by models you subscribe to on Onlyfans.
 
 ## Setup
 1. Clone this repository
