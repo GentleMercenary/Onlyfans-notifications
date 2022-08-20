@@ -2,6 +2,5 @@ Cargo.lock
 /target
 /.vscode
 auth.json
-log.txt
 /data
 /logs
