@@ -282,11 +282,10 @@ impl _Toast for Content {
 		if let Some(thumb) = self
 			.media
 			.iter()
-			.filter_map(|media| media.preview.as_deref())
-			.next()
+			.find_map(|media| media.preview.as_deref().filter(|s| s != &""))
 		{
 			let thumb = client
-				.fetch_file(thumb, &user_path.join("thumbs"), None)
+				.fetch_file(&thumb, &user_path.join("thumbs"), None)
 				.await?;
 			toast.image(2, Image::new_local(thumb)?);
 		}
@@ -316,11 +315,10 @@ impl _Toast for ChatMessage {
 		if let Some(thumb) = self
 			.media
 			.iter()
-			.filter_map(|media| media.preview.as_deref())
-			.next()
+			.find_map(|media| media.preview.as_deref().filter(|s| s != &""))
 		{
 			let thumb = client
-				.fetch_file(thumb, &user_path.join("thumbs"), None)
+				.fetch_file(&thumb, &user_path.join("thumbs"), None)
 				.await?;
 			toast.image(2, Image::new_local(thumb)?);
 		}
@@ -342,11 +340,10 @@ impl _Toast for StoryMessage {
 		if let Some(thumb) = self
 			.media
 			.iter()
-			.filter_map(|media| media.preview.as_deref())
-			.next()
+			.find_map(|media| media.preview.as_deref().filter(|s| s != &""))
 		{
 			let thumb = client
-				.fetch_file(thumb, &user_path.join("thumbs"), None)
+				.fetch_file(&thumb, &user_path.join("thumbs"), None)
 				.await?;
 			toast.image(2, Image::new_local(thumb)?);
 		}
