@@ -86,7 +86,7 @@ struct AuthParams {
 async fn get_params() -> Result<(StaticParams, AuthParams), Error> {
 	Ok((
 		reqwest::get(
-			"https://raw.githubusercontent.com/DATAHOARDERS/dynamic-rules/ca6e357cbd24115d954827b3dde6a49a774f578a/onlyfans.json",
+			"https://raw.githubusercontent.com/DATAHOARDERS/dynamic-rules/main/onlyfans.json",
 		)
 		.and_then(|response| response.text()).await
 		.and_then(|data| {
