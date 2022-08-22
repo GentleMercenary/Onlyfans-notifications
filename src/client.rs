@@ -82,14 +82,15 @@ struct AuthParams {
 #[once(time = 10, result = true, sync_writes = true)]
 async fn get_params() -> Result<(StaticParams, AuthParams), Error> {
 	Ok((
-		serde_json::from_str(
-			&reqwest::get(
-				"https://raw.githubusercontent.com/DATAHOARDERS/dynamic-rules/main/onlyfans.json",
-			)
-			.and_then(|response| response.text())
-			.inspect_err(|err| error!("{err:?}"))
-			.await?,
-		)?,
+		reqwest::get(
+			"https://raw.githubusercontent.com/DATAHOARDERS/dynamic-rules/ca6e357cbd24115d954827b3dde6a49a774f578a/onlyfans.json",
+		)
+		.and_then(|response| response.text()).await
+		.inspect(|s| debug!("{s}"))
+		.and_then(|data| {
+			Ok(serde_json::from_str::<StaticParams>(&data)
+			.inspect_err(|err| error!("{err:?}")))
+		})??,
 		fs::read_to_string("auth.json")
 		.inspect_err(|err| error!("{err:?}"))
 		.and_then(|data| {
@@ -217,6 +218,7 @@ impl ClientExt for Client {
 			.send()
 			.await
 			.and_then(|response| response.error_for_status())
+			.inspect_err(|err| error!("{err:?}"))
 			.map_err(|err| err.into())
 	}
 
@@ -230,15 +232,8 @@ impl ClientExt for Client {
 
 	async fn fetch_user(&self, user_id: &str) -> Result<message_types::User, Error> {
 		self.fetch(&format!("https://onlyfans.com/api2/v2/users/{}", user_id))
-			.and_then(|response| async move {
-				futures::future::ready(response.error_for_status().map_err(|err| err.into())).await
-			})
-			.inspect_err(|err| error!("{err:?}"))
-			.and_then(|response| async move { response.text().await.map_err(|err| err.into()) })
-			.and_then(|response| async move {
-				serde_json::from_str(&response).map_err(|err| err.into())
-			})
-			.await
+			.and_then(|response| async move { response.text().await.map_err(|err| err.into()) }).await
+			.and_then(|response| serde_json::from_str(&response).map_err(|err| err.into()))
 			.inspect(|user| info!("Got user: {:?}", user))
 	}
 
@@ -247,15 +242,8 @@ impl ClientExt for Client {
 			"https://onlyfans.com/api2/v2/posts/{}?skip_users=all",
 			post_id
 		))
-		.and_then(|response| async move {
-			futures::future::ready(response.error_for_status().map_err(|err| err.into())).await
-		})
-		.inspect_err(|err| error!("{err:?}"))
-		.and_then(|response| async move { response.text().await.map_err(|err| err.into()) })
-		.and_then(
-			|response| async move { serde_json::from_str(&response).map_err(|err| err.into()) },
-		)
-		.await
+		.and_then(|response| async move { response.text().await.map_err(|err| err.into()) }).await
+		.and_then(|response| serde_json::from_str(&response).map_err(|err| err.into()))
 		.inspect(|content| info!("Got content: {:?}", content))
 	}
 
