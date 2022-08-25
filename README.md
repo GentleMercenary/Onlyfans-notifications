@@ -15,3 +15,10 @@ origin = "Messages" | "Posts" | "Stories"<br>
 content_type = "Audios" | "Images" | "Videos"<br>
 
 This is the same format as the default for [this scraper](https://github.com/DIGITALCRIMINALs/OnlyFans), so you can symlink the `data` folder to wherever you store your scrapes or vice versa.
+
+## Behaviour
+When the connection gets interrupted (because of unstable network, wake up from sleep, ...) the application will stay running, but no notifications can be received until the user manually reconnects. To reconnect the websocket, click the tray icon. Once the connection is established, the icon will change, indicating that the connection was made succesfully.
+
+| Connected | Disconnected |
+|-----------|--------------|
+|![Connected](res/icon.ico)|![Disconnected](res/icon2.ico)|
