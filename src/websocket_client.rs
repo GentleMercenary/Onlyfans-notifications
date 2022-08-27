@@ -87,7 +87,7 @@ impl WebSocketClient {
 			tokio::select! {
 				msg = self.wait_for_message() => {
 					if let Ok(msg) = msg {
-						msg.handle_message().await?
+						let _ = msg.handle_message().await;
 					}
 					msg_received = true;
 				},

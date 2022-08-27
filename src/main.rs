@@ -63,7 +63,7 @@ fn spawn_connection_thread(proxy: EventLoopProxy<Events>, cancel_token: Arc<Canc
 
 		Client::with_auth()
 			.and_then(|client| async move { client.fetch(auth_link).await })
-			.and_then(|response| async move { response.text().await.map_err(|err| err.into()) })
+			.and_then(|response| response.text().map_err(|err| err.into()))
 			.and_then(|response| async move {
 				info!("Successful fetch for authentication parameters");
 
