@@ -7,8 +7,7 @@ use super::client::ClientExt;
 use async_trait::async_trait;
 use chrono::{DateTime, Utc};
 use filetime::{set_file_mtime, FileTime};
-use futures::future::try_join_all;
-use futures_util::future::try_join;
+use futures::future::{join_all, join, try_join};
 use reqwest::{Client, Url};
 use serde::{Deserialize, Deserializer, Serialize};
 use std::{error, path::Path, process::Command};
@@ -369,8 +368,8 @@ pub enum MessageType {
 }
 
 impl MessageType {
-	async fn download_media(client: &Client, media: &Vec<Media>, path: &Path) -> Result<(), Error> {
-		try_join_all(media.iter().filter_map(|media| {
+	async fn download_media(client: &Client, media: &Vec<Media>, path: &Path) {
+		join_all(media.iter().filter_map(|media| {
 			media.source.as_ref().map(|url| async move {
 				client
 					.fetch_file(
@@ -383,17 +382,18 @@ impl MessageType {
 						None,
 					)
 					.await
+					.inspect_err(|err| error!("Download failed: {err}"))
 					.and_then(|path| {
 						set_file_mtime(
 							path,
 							FileTime::from_unix_time(media.created_at.timestamp(), 0),
 						)
+						.inspect_err(|err| error!("{err}"))
 						.map_err(|err| err.into())
 					})
 			})
 		}))
-		.await
-		.map(|_| ())
+		.await;
 	}
 
 	async fn handle_content(
@@ -448,6 +448,7 @@ impl MessageType {
 					error!("Could't show notification: {:?}", e);
 				})),
 			)
+			.inspect_err(|err| error!("{err}"))
 			.map_err(|err| err.into())
 	}
 
@@ -476,23 +477,22 @@ impl MessageType {
 						let (user, content) = try_join(
 							client.fetch_user(&msg.user_id),
 							client.fetch_content(&msg.id),
-						)
-						.await?;
-						try_join(
+						).await?;
+
+						join(
 							Self::handle_content(&client, &user, &content),
 							Self::download_media(
 								&client,
 								&content.media,
 								&Path::new("data").join(&user.username).join("Posts"),
-							),
+							)
 						)
-						.await
-						.map(|_| ())
+						.await.0
 					}
 					TaggedMessageType::Api2ChatMessage(msg) => {
 						info!("Chat message received: {:?}", msg);
 
-						try_join(
+						join(
 							Self::handle_content(&client, &msg.from_user, msg),
 							Self::download_media(
 								&client,
@@ -500,28 +500,26 @@ impl MessageType {
 								&Path::new("data")
 									.join(&msg.from_user.username)
 									.join("Messages"),
-							),
+							)
 						)
-						.await
-						.map(|_| ())
+						.await.0
 					}
 					TaggedMessageType::Stories(msg) => {
 						info!("Story message received: {:?}", msg);
 
-						try_join_all(msg.iter().map(|msg| async {
+						join_all(msg.iter().map(|msg| async {
 							let user = client.fetch_user(&msg.user_id.to_string()).await?;
-							try_join(
-								Self::handle_content(&client, &user, msg),
-								Self::download_media(
+							join(
+							Self::handle_content(&client, &user, msg),
+							Self::download_media(
 									&client,
 									&msg.media,
 									&Path::new("data").join(&user.username).join("Stories"),
-								),
+								)
 							)
-							.await
+							.await.0
 						}))
-						.await
-						.map(|_| ())
+						.await.into_iter().find(|res| res.is_err()).unwrap_or(Ok(()))
 					}
 				}
 			}

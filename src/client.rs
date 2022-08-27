@@ -1,3 +1,5 @@
+#![allow(dead_code)]
+
 use super::message_types::{self, Error};
 
 use async_trait::async_trait;
@@ -61,12 +63,12 @@ struct StaticParams {
 	static_param: String,
 	format: String,
 	checksum_indexes: Vec<usize>,
-	// checksum_constants: Vec<i32>,
+	checksum_constants: Vec<i32>,
 	checksum_constant: i32,
 	app_token: String,
 	remove_headers: Vec<String>,
-	// error_code: i32,
-	// message: String
+	error_code: i32,
+	message: String
 }
 
 #[derive(Deserialize, Clone, Debug)]
@@ -229,14 +231,14 @@ impl ClientExt for Client {
 	async fn fetch(&self, link: &str) -> Result<Response, Error> {
 		Retry::spawn(
 			ExponentialBackoff::from_millis(5000).take(5),
-			|| async move { self.ifetch(link).await },
+			|| { self.ifetch(link) },
 		)
 		.await
 	}
 
 	async fn fetch_user(&self, user_id: &str) -> Result<message_types::User, Error> {
 		self.fetch(&format!("https://onlyfans.com/api2/v2/users/{}", user_id))
-			.and_then(|response| async move { response.text().await.map_err(|err| err.into()) }).await
+			.and_then(|response| response.text().map_err(|err| err.into())).await
 			.and_then(|response| serde_json::from_str(&response).map_err(|err| err.into()))
 			.inspect(|user| info!("Got user: {:?}", user))
 	}
@@ -246,7 +248,7 @@ impl ClientExt for Client {
 			"https://onlyfans.com/api2/v2/posts/{}?skip_users=all",
 			post_id
 		))
-		.and_then(|response| async move { response.text().await.map_err(|err| err.into()) }).await
+		.and_then(|response| response.text().map_err(|err| err.into())).await
 		.and_then(|response| serde_json::from_str(&response).map_err(|err| err.into()))
 		.inspect(|content| info!("Got content: {:?}", content))
 	}
@@ -273,13 +275,8 @@ impl ClientExt for Client {
 			let mut f = File::create(&full_path)?;
 
 			self.fetch(&url)
-				.and_then(
-					|response| async move { response.bytes().await.map_err(|err| err.into()) },
-				)
-				.await
-				.and_then(|bytes| {
-					std::io::copy(&mut Cursor::new(bytes), &mut f).map_err(|err| err.into())
-				})
+				.and_then(|response| response.bytes().map_err(|err| err.into())).await
+				.and_then(|bytes| { std::io::copy(&mut Cursor::new(bytes), &mut f).map_err(|err| err.into()) })
 				.inspect(|byte_count| info!("Wrote {} bytes to {:?}", byte_count, full_path))?;
 		}
 
