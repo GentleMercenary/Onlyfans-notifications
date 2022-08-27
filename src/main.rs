@@ -1,9 +1,10 @@
-#![windows_subsystem = "windows"]
+// #![windows_subsystem = "windows"]
 #![feature(result_option_inspect)]
 
 mod client;
 mod message_types;
 mod websocket_client;
+mod deserializers;
 use client::ClientExt;
 use message_types::Error;
 
@@ -190,7 +191,7 @@ async fn main() -> Result<(), Box<dyn error::Error>> {
 #[cfg(test)]
 mod tests {
 	use simplelog::{ColorChoice, TermLogger, TerminalMode};
-
+	use super::message_types::Handleable;
 	use super::*;
 
 	#[tokio::test]
@@ -206,7 +207,6 @@ mod tests {
 		.unwrap();
 
 		let incoming = r#"{
-			"api2_chat_message": {
 				"text": "This is a message<br />\n to test <a href = \"/onlyfans\">MARKDOWN parsing</a> 👌<br />\n in notifications 💯",
 				"price": 3.99,
 				"fromUser": {
@@ -224,8 +224,7 @@ mod tests {
 						"type": "photo"
 					}
 				]
-			} 
-		}"#;
+			}"#;
 
 		let msg = serde_json::from_str::<message_types::MessageType>(&incoming).unwrap();
 		assert!(matches!(

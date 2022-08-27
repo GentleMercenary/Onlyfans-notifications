@@ -1,15 +1,15 @@
 #![allow(dead_code)]
 
-use super::message_types::{self, Error};
+use super::message_types::*;
+use super::deserializers::parse_cookie;
 
 use async_trait::async_trait;
 use cached::proc_macro::once;
 use crypto::{digest::Digest, sha1::Sha1};
 use futures::TryFutureExt;
 use reqwest::{cookie::Jar, header, Client, Response, Url};
-use serde::{Deserialize, Deserializer};
+use serde::{Deserialize};
 use std::{
-	collections::HashMap,
 	fmt, fs,
 	fs::File,
 	io::Cursor,
@@ -22,8 +22,8 @@ use tokio_retry::{strategy::ExponentialBackoff, Retry};
 #[derive(Clone, Debug)]
 pub struct Cookie {
 	pub auth_id: String,
-	sess: String,
-	auth_hash: String,
+	pub sess: String,
+	pub auth_hash: String,
 }
 
 impl fmt::Display for Cookie {
@@ -34,28 +34,6 @@ impl fmt::Display for Cookie {
 
 		Ok(())
 	}
-}
-
-fn parse_cookie<'de, D>(deserializer: D) -> Result<Cookie, D::Error>
-where
-	D: Deserializer<'de>,
-{
-	let s: &str = Deserialize::deserialize(deserializer)?;
-	let mut cookie_map: HashMap<&str, &str> = HashMap::new();
-	let filtered_str = s.replace(';', "");
-	for c in filtered_str.split(' ') {
-		let mut split_cookie = c.split('=');
-		cookie_map.insert(
-			split_cookie.next().unwrap(),
-			split_cookie.next().unwrap()
-		);
-	}
-
-	Ok(Cookie {
-		auth_id: cookie_map.get("auth_id").unwrap_or(&"").to_string(),
-		sess: cookie_map.get("sess").unwrap_or(&"").to_string(),
-		auth_hash: cookie_map.get("auth_hash").unwrap_or(&"").to_string(),
-	})
 }
 
 #[derive(Deserialize, Clone, Debug)]
@@ -113,8 +91,8 @@ pub trait ClientExt {
 	async fn with_auth() -> Result<Client, Error>;
 	async fn ifetch(&self, link: &str) -> Result<Response, Error>;
 	async fn fetch(&self, link: &str) -> Result<Response, Error>;
-	async fn fetch_user(&self, user_id: &str) -> Result<message_types::User, Error>;
-	async fn fetch_content(&self, post_id: &str) -> Result<message_types::Content, Error>;
+	async fn fetch_user(&self, user_id: &str) -> Result<User, Error>;
+	async fn fetch_content(&self, post_id: &str) -> Result<Content<PostContent>, Error>;
 	async fn fetch_file(
 		&self,
 		url: &str,
@@ -236,14 +214,14 @@ impl ClientExt for Client {
 		.await
 	}
 
-	async fn fetch_user(&self, user_id: &str) -> Result<message_types::User, Error> {
+	async fn fetch_user(&self, user_id: &str) -> Result<User, Error> {
 		self.fetch(&format!("https://onlyfans.com/api2/v2/users/{}", user_id))
 			.and_then(|response| response.text().map_err(|err| err.into())).await
 			.and_then(|response| serde_json::from_str(&response).map_err(|err| err.into()))
 			.inspect(|user| info!("Got user: {:?}", user))
 	}
 
-	async fn fetch_content(&self, post_id: &str) -> Result<message_types::Content, Error> {
+	async fn fetch_content(&self, post_id: &str) -> Result<Content<PostContent>, Error> {
 		self.fetch(&format!(
 			"https://onlyfans.com/api2/v2/posts/{}?skip_users=all",
 			post_id

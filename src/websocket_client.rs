@@ -1,4 +1,4 @@
-use super::message_types::{self, Error};
+use super::message_types::{self, Error, Handleable};
 
 use futures_util::{SinkExt, StreamExt};
 use std::time::Duration;

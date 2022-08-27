@@ -3,15 +3,15 @@
 use crate::MANAGER;
 
 use super::client::ClientExt;
+use super::deserializers::*;
 
 use async_trait::async_trait;
 use chrono::{DateTime, Utc};
 use filetime::{set_file_mtime, FileTime};
-use futures::future::{join_all, join, try_join};
+use futures::{future::{join_all, join, try_join}};
 use reqwest::{Client, Url};
-use serde::{Deserialize, Deserializer, Serialize};
+use serde::{Deserialize, Serialize};
 use std::{error, path::Path, process::Command};
-use strip_markdown::*;
 use winrt_toast::{
 	content::{
 		image::{ImageHintCrop, ImagePlacement},
@@ -53,6 +53,180 @@ pub struct ConnectedMessage {
 }
 
 #[derive(Deserialize, Debug)]
+#[serde(rename_all = "camelCase")]
+pub struct Content<T: ContentType> {
+	#[serde(default = "Utc::now")]
+	#[serde(deserialize_with = "str_to_date")]
+	posted_at: DateTime<Utc>,
+	#[serde(flatten)]
+	unique: T
+}
+
+async fn handle_content<T: ContentType>(content: &Content<T>, client: &Client, user: &User) -> Result<(), Error> {
+	let parsed = user.avatar.parse::<Url>()?;
+	let filename = parsed
+		.path_segments()
+		.and_then(|segments| {
+			let mut reverse_iter = segments.rev();
+			let ext = reverse_iter.next().and_then(|file| file.split('.').last());
+			let filename = reverse_iter.next();
+
+			Option::zip(filename, ext).map(|(filename, ext)| [filename, ext].join("."))
+		})
+		.ok_or("Filename unknown")?;
+
+	let mut user_path = Path::new("data").join(&user.username);
+	std::fs::create_dir_all(&user_path)?;
+	user_path = user_path.canonicalize()?;
+
+	let avatar = client
+		.fetch_file(
+			&user.avatar,
+			&user_path.join("Profile").join("Avatars"),
+			Some(&filename),
+		)
+		.await?;
+
+	info!("Creating notification");
+	let content_type = <T as ContentType>::get_type();
+	let mut toast: Toast = <T as ContentType>::to_toast(&content.unique);
+	toast
+		.header(Header::new(content_type, content_type, content_type))
+		.launch(user_path.join(content_type).to_str().unwrap())
+		.text1(&user.name).image(
+			1,
+			Image::new_local(avatar)?
+				.with_hint_crop(ImageHintCrop::Circle)
+				.with_placement(ImagePlacement::AppLogoOverride),
+		);
+
+	if let Some(thumb) = <T as ContentType>::get_thumbnail(&content.unique) {
+		let thumb = client
+			.fetch_file(&thumb, &user_path.join("thumbs"), None)
+			.await?;
+		toast.image(2, Image::new_local(thumb)?);
+	}
+
+	MANAGER
+		.wait()
+		.show_with_callbacks(
+			&toast,
+			Some(Box::new(move |rs| {
+				if let Ok(s) = rs {
+					Command::new("explorer").arg(s).spawn().unwrap();
+				}
+			})),
+			None,
+			Some(Box::new(move |e| {
+				error!("Could't show notification: {:?}", e);
+			})),
+		)
+		.inspect_err(|err| error!("{err}"))
+		.map_err(|err| err.into())
+}
+
+pub trait ContentType {
+	fn get_type() -> &'static str;
+	fn get_thumbnail(&self) -> Option<&str>;
+	fn to_toast(&self) -> Toast;
+}
+
+#[derive(Deserialize, Debug)]
+#[serde(rename_all = "camelCase")]
+pub struct PostContent {
+	#[serde(deserialize_with = "de_markdown_string")]
+	text: String,
+	price: Option<f32>,
+	media: Vec<Media<PostMedia>>
+}
+
+impl ContentType for PostContent {
+	fn get_type() -> &'static str {
+		"Posts"
+	}
+	
+	fn get_thumbnail(&self) -> Option<&str> {
+		self
+		.media
+		.iter()
+		.find_map(|media| media.unique.preview.as_deref().filter(|s| s != &""))
+	}
+
+	fn to_toast(&self) -> Toast {
+		let mut toast = Toast::new();
+
+		info!("{}", &self.text);
+		toast.text2(&self.text);
+
+		if let Some(price) = self.price && price > 0f32 {
+			toast.text3(Text::new(format!("${:.2}", price))
+				.with_placement(TextPlacement::Attribution));
+		}
+
+		toast
+	}
+}
+
+#[derive(Deserialize, Debug)]
+#[serde(rename_all = "camelCase")]
+pub struct MessageContent {
+	#[serde(deserialize_with = "de_markdown_string")]
+	text: String,
+	price: Option<f32>,
+	media: Vec<Media<MessageMedia>>
+}
+
+impl ContentType for MessageContent {
+	fn get_type() -> &'static str {
+		"Messages"
+	}
+
+	fn get_thumbnail(&self) -> Option<&str> {
+		self
+		.media
+		.iter()
+		.find_map(|media| media.unique.preview.as_deref().filter(|s| s != &""))
+	}
+
+	fn to_toast(&self) -> Toast {
+		let mut toast = Toast::new();
+
+		info!("{}", &self.text);
+		toast.text2(&self.text);
+
+		if let Some(price) = self.price && price > 0f32 {
+			toast.text3(Text::new(format!("${:.2}", price))
+				.with_placement(TextPlacement::Attribution));
+		}
+
+		toast
+	}
+}
+
+#[derive(Deserialize, Debug)]
+#[serde(rename_all = "camelCase")]
+pub struct StoryContent {
+	media: Vec<Media<StoryMedia>>
+}
+
+impl ContentType for StoryContent {
+	fn get_type() -> &'static str {
+		"Stories"
+	}
+
+	fn get_thumbnail(&self) -> Option<&str> {
+		self
+		.media
+		.iter()
+		.find_map(|media| media.unique.files.preview.url.as_deref().filter(|s| s != &""))
+	}
+
+	fn to_toast(&self) -> Toast {
+		Toast::new()
+	}
+}
+
+#[derive(Deserialize, Debug)]
 #[serde(rename_all = "snake_case")]
 pub enum MediaTypes {
 	Photo,
@@ -61,77 +235,85 @@ pub enum MediaTypes {
 	Audio,
 }
 
-#[derive(Debug)]
-pub struct Media {
+#[derive(Deserialize, Debug)]
+#[serde(rename_all = "camelCase")]
+pub struct Media<T: ViewableMedia> {
 	id: u64,
 	can_view: bool,
+	#[serde(default = "Utc::now")]
+	#[serde(deserialize_with = "str_to_date")]
 	created_at: DateTime<Utc>,
-	source: Option<String>,
-	preview: Option<String>,
+	#[serde(flatten)]
+	unique: T,
+	#[serde(alias = "type")]
 	media_type: MediaTypes,
 }
 
-fn de_markdown_string<'de, D>(deserializer: D) -> Result<String, D::Error>
-where
-	D: Deserializer<'de>,
-{
-	let s = String::deserialize(deserializer)?;
-	Ok(strip_markdown(&s))
+pub struct _MediaInner<'a> {
+	source: &'a Option<String>,
+	thumbnail: &'a Option<String>
+}
+
+pub trait ViewableMedia {
+	fn get(&self) -> _MediaInner;
 }
 
 #[derive(Deserialize, Debug)]
 #[serde(rename_all = "camelCase")]
-pub struct Content {
-	id: u32,
-	#[serde(deserialize_with = "de_markdown_string")]
-	text: String,
-	price: Option<f32>,
-	#[serde(deserialize_with = "str_to_date")]
-	posted_at: DateTime<Utc>,
-	#[serde(deserialize_with = "media_from_content")]
-	media: Vec<Media>,
+pub struct PostMedia {
+	full: Option<String>,
+	preview: Option<String>,
 }
 
-fn media_from_content<'de, D>(deserializer: D) -> Result<Vec<Media>, D::Error>
-where
-	D: Deserializer<'de>,
-{
-	#[derive(Deserialize)]
-	#[serde(rename_all = "camelCase")]
-	struct Outer {
-		id: u64,
-		can_view: bool,
-		#[serde(default = "Utc::now")]
-		#[serde(deserialize_with = "str_to_date")]
-		created_at: DateTime<Utc>,
-		full: Option<String>,
-		preview: Option<String>,
-		#[serde(alias = "type")]
-		media_type: MediaTypes,
+impl ViewableMedia for PostMedia {
+	fn get(&self) -> _MediaInner {
+		_MediaInner {
+			source: &self.full,
+			thumbnail: &self.preview
+		}
 	}
-
-	<Vec<Outer>>::deserialize(deserializer).map(|vec| {
-		vec.into_iter()
-			.map(|outer| Media {
-				id: outer.id,
-				can_view: outer.can_view,
-				created_at: outer.created_at,
-				source: outer.full,
-				preview: outer.preview,
-				media_type: outer.media_type,
-			})
-			.collect()
-	})
 }
 
-fn str_to_date<'de, D>(deserializer: D) -> Result<DateTime<Utc>, D::Error>
-where
-	D: Deserializer<'de>,
-{
-	let s: &str = Deserialize::deserialize(deserializer)?;
-	Ok(DateTime::parse_from_rfc3339(s)
-		.map(|date| date.with_timezone(&Utc))
-		.unwrap())
+#[derive(Deserialize, Debug)]
+#[serde(rename_all = "camelCase")]
+pub struct MessageMedia {
+	src: Option<String>,
+	preview: Option<String>
+}
+
+impl ViewableMedia for MessageMedia {
+	fn get(&self) -> _MediaInner {
+		_MediaInner {
+			source: &self.src,
+			thumbnail: &self.preview
+		}
+	}
+}
+
+#[derive(Deserialize, Debug)]
+struct _FilesInner {
+	url: Option<String>
+}
+
+#[derive(Deserialize, Debug)]
+struct _Files {
+	source: _FilesInner,
+	preview: _FilesInner
+}
+
+#[derive(Deserialize, Debug)]
+#[serde(rename_all = "camelCase")]
+pub struct StoryMedia {
+	files: _Files
+}
+
+impl ViewableMedia for StoryMedia {
+	fn get(&self) -> _MediaInner {
+		_MediaInner {
+			source: &self.files.source.url,
+			thumbnail: &self.files.preview.url
+		}
+	}
 }
 
 #[derive(Deserialize, Clone, Debug)]
@@ -152,203 +334,18 @@ pub struct PostPublishedMessage {
 #[derive(Deserialize, Debug)]
 #[serde(rename_all = "camelCase")]
 pub struct ChatMessage {
-	#[serde(deserialize_with = "de_markdown_string")]
-	text: String,
 	from_user: User,
-	price: Option<f32>,
-	#[serde(deserialize_with = "media_from_chat")]
-	media: Vec<Media>,
-}
+	#[serde(flatten)]
+	content: Content<MessageContent>
 
-fn media_from_chat<'de, D>(deserializer: D) -> Result<Vec<Media>, D::Error>
-where
-	D: Deserializer<'de>,
-{
-	#[derive(Deserialize)]
-	#[serde(rename_all = "camelCase")]
-	struct Outer {
-		id: u64,
-		can_view: bool,
-		#[serde(default = "Utc::now")]
-		#[serde(deserialize_with = "str_to_date")]
-		created_at: DateTime<Utc>,
-		src: Option<String>,
-		preview: Option<String>,
-		#[serde(alias = "type")]
-		media_type: MediaTypes,
-	}
-
-	<Vec<Outer>>::deserialize(deserializer).map(|vec| {
-		vec.into_iter()
-			.map(|outer| Media {
-				id: outer.id,
-				can_view: outer.can_view,
-				created_at: outer.created_at,
-				source: outer.src,
-				preview: outer.preview,
-				media_type: outer.media_type,
-			})
-			.collect()
-	})
 }
 
 #[derive(Deserialize, Debug)]
 #[serde(rename_all = "camelCase")]
 pub struct StoryMessage {
-	id: u32,
 	user_id: u32,
-	#[serde(deserialize_with = "media_from_story")]
-	media: Vec<Media>,
-}
-
-fn media_from_story<'de, D>(deserializer: D) -> Result<Vec<Media>, D::Error>
-where
-	D: Deserializer<'de>,
-{
-	#[derive(Deserialize)]
-	#[serde(rename_all = "camelCase")]
-	struct Outer {
-		id: u64,
-		can_view: bool,
-		#[serde(default = "Utc::now")]
-		#[serde(deserialize_with = "str_to_date")]
-		created_at: DateTime<Utc>,
-		files: Option<Inner>,
-		#[serde(alias = "type")]
-		media_type: MediaTypes,
-	}
-
-	#[derive(Deserialize)]
-	struct Inner {
-		source: Option<UrlInner>,
-		preview: Option<UrlInner>,
-	}
-
-	#[derive(Deserialize)]
-	struct UrlInner {
-		url: Option<String>,
-	}
-
-	<Vec<Outer>>::deserialize(deserializer).map(|vec| {
-		vec.into_iter()
-			.map(|outer| {
-				let (source, preview) = outer
-					.files
-					.map(|inner| {
-						(
-							inner.source.and_then(|i| i.url),
-							inner.preview.and_then(|i| i.url),
-						)
-					})
-					.unwrap();
-
-				Media {
-					id: outer.id,
-					can_view: outer.can_view,
-					created_at: outer.created_at,
-					source,
-					preview,
-					media_type: outer.media_type,
-				}
-			})
-			.collect()
-	})
-}
-
-#[async_trait]
-trait _Toast {
-	async fn toast(&self, client: &Client, user_path: &Path) -> Result<Toast, Error>;
-}
-
-#[async_trait]
-impl _Toast for Content {
-	async fn toast(&self, client: &Client, user_path: &Path) -> Result<Toast, Error> {
-		let content_type = "Posts";
-
-		let mut toast = Toast::new();
-		toast
-			.header(Header::new(content_type, content_type, content_type))
-			.launch(user_path.join(content_type).to_str().unwrap())
-			.text2(self.text.clone());
-
-		info!("{}", self.text);
-
-		if let Some(price) = self.price && price > 0f32 {
-			toast.text3(Text::new(format!("${:.2}", price))
-				.with_placement(TextPlacement::Attribution));
-		}
-
-		if let Some(thumb) = self
-			.media
-			.iter()
-			.find_map(|media| media.preview.as_deref().filter(|s| s != &""))
-		{
-			let thumb = client
-				.fetch_file(&thumb, &user_path.join("thumbs"), None)
-				.await?;
-			toast.image(2, Image::new_local(thumb)?);
-		}
-
-		Ok(toast)
-	}
-}
-
-#[async_trait]
-impl _Toast for ChatMessage {
-	async fn toast(&self, client: &Client, user_path: &Path) -> Result<Toast, Error> {
-		let content_type = "Messages";
-
-		let mut toast = Toast::new();
-		toast
-			.header(Header::new(content_type, content_type, content_type))
-			.launch(user_path.join(content_type).to_str().unwrap())
-			.text2(self.text.clone());
-
-		info!("{}", self.text);
-
-		if let Some(price) = self.price && price > 0f32 {
-			toast.text3(Text::new(format!("${:.2}", price))
-				.with_placement(TextPlacement::Attribution));
-		}
-
-		if let Some(thumb) = self
-			.media
-			.iter()
-			.find_map(|media| media.preview.as_deref().filter(|s| s != &""))
-		{
-			let thumb = client
-				.fetch_file(&thumb, &user_path.join("thumbs"), None)
-				.await?;
-			toast.image(2, Image::new_local(thumb)?);
-		}
-
-		Ok(toast)
-	}
-}
-
-#[async_trait]
-impl _Toast for StoryMessage {
-	async fn toast(&self, client: &Client, user_path: &Path) -> Result<Toast, Error> {
-		let content_type = "Stories";
-
-		let mut toast = Toast::new();
-		toast
-			.header(Header::new(content_type, content_type, content_type))
-			.launch(user_path.join(content_type).to_str().unwrap());
-
-		if let Some(thumb) = self
-			.media
-			.iter()
-			.find_map(|media| media.preview.as_deref().filter(|s| s != &""))
-		{
-			let thumb = client
-				.fetch_file(&thumb, &user_path.join("thumbs"), None)
-				.await?;
-			toast.image(2, Image::new_local(thumb)?);
-		}
-
-		Ok(toast)
-	}
+	#[serde(flatten)]
+	content: Content<StoryContent>
 }
 
 #[derive(Deserialize, Debug)]
@@ -367,92 +364,42 @@ pub enum MessageType {
 	Error(ErrorMessage),
 }
 
-impl MessageType {
-	async fn download_media(client: &Client, media: &Vec<Media>, path: &Path) {
-		join_all(media.iter().filter_map(|media| {
-			media.source.as_ref().map(|url| async move {
-				client
-					.fetch_file(
-						url,
-						&path.join(match media.media_type {
-							MediaTypes::Photo => "Images",
-							MediaTypes::Audio => "Audios",
-							MediaTypes::Video | MediaTypes::Gif => "Videos",
-						}),
-						None,
-					)
-					.await
-					.inspect_err(|err| error!("Download failed: {err}"))
-					.and_then(|path| {
-						set_file_mtime(
+async fn download_media<T: ViewableMedia>(client: &Client, media: &Vec<Media<T>>, path: &Path) {
+	join_all(media.iter().filter_map(|media| {
+		media.unique.get().source.as_ref().map(|url| async move {
+			client
+				.fetch_file(
+					&url,
+					&path.join(match media.media_type {
+						MediaTypes::Photo => "Images",
+						MediaTypes::Audio => "Audios",
+						MediaTypes::Video | MediaTypes::Gif => "Videos",
+					}),
+					None,
+				)
+				.await
+				.inspect_err(|err| error!("Download failed: {err}"))
+				.and_then(|path| {
+					set_file_mtime(
 							path,
 							FileTime::from_unix_time(media.created_at.timestamp(), 0),
 						)
 						.inspect_err(|err| error!("{err}"))
 						.map_err(|err| err.into())
-					})
-			})
-		}))
-		.await;
-	}
+				})
+		})
+	}))
+	.await;
+}
 
-	async fn handle_content(
-		client: &Client,
-		user: &User,
-		content: &impl _Toast,
-	) -> Result<(), Error> {
-		let parsed = user.avatar.parse::<Url>()?;
-		let filename = parsed
-			.path_segments()
-			.and_then(|segments| {
-				let mut reverse_iter = segments.rev();
-				let ext = reverse_iter.next().and_then(|file| file.split('.').last());
-				let filename = reverse_iter.next();
+#[async_trait]
+pub trait Handleable {
+	async fn handle_message(self) -> Result<(), Error>;
+}
 
-				Option::zip(filename, ext).map(|(filename, ext)| [filename, ext].join("."))
-			})
-			.ok_or("Filename unknown")?;
-
-		let mut user_path = Path::new("data").join(&user.username);
-		std::fs::create_dir_all(&user_path)?;
-		user_path = user_path.canonicalize()?;
-
-		let avatar = client
-			.fetch_file(
-				&user.avatar,
-				&user_path.join("Profile").join("Avatars"),
-				Some(&filename),
-			)
-			.await?;
-
-		info!("Creating notification");
-		let mut toast = content.toast(client, &user_path).await?;
-		toast.text1(&user.name).image(
-			1,
-			Image::new_local(avatar)?
-				.with_hint_crop(ImageHintCrop::Circle)
-				.with_placement(ImagePlacement::AppLogoOverride),
-		);
-
-		MANAGER
-			.wait()
-			.show_with_callbacks(
-				&toast,
-				Some(Box::new(move |rs| {
-					if let Ok(s) = rs {
-						Command::new("explorer").arg(s).spawn().unwrap();
-					}
-				})),
-				None,
-				Some(Box::new(move |e| {
-					error!("Could't show notification: {:?}", e);
-				})),
-			)
-			.inspect_err(|err| error!("{err}"))
-			.map_err(|err| err.into())
-	}
-
-	pub async fn handle_message(&self) -> Result<(), Error> {
+#[async_trait]
+impl Handleable for MessageType {
+	async fn handle_message(self) -> Result<(), Error> {
 		return match self {
 			Self::Connected(_) => {
 				info!("Connect message received");
@@ -468,61 +415,66 @@ impl MessageType {
 				Err(format!("websocket received error message with code {}", msg.error).into())
 			}
 			Self::Tagged(tagged) => {
-				let client = Client::with_auth().await?;
-
-				match tagged {
-					TaggedMessageType::PostPublished(msg) => {
-						info!("Post message received: {:?}", msg);
-
-						let (user, content) = try_join(
-							client.fetch_user(&msg.user_id),
-							client.fetch_content(&msg.id),
-						).await?;
-
-						join(
-							Self::handle_content(&client, &user, &content),
-							Self::download_media(
-								&client,
-								&content.media,
-								&Path::new("data").join(&user.username).join("Posts"),
-							)
-						)
-						.await.0
-					}
-					TaggedMessageType::Api2ChatMessage(msg) => {
-						info!("Chat message received: {:?}", msg);
-
-						join(
-							Self::handle_content(&client, &msg.from_user, msg),
-							Self::download_media(
-								&client,
-								&msg.media,
-								&Path::new("data")
-									.join(&msg.from_user.username)
-									.join("Messages"),
-							)
-						)
-						.await.0
-					}
-					TaggedMessageType::Stories(msg) => {
-						info!("Story message received: {:?}", msg);
-
-						join_all(msg.iter().map(|msg| async {
-							let user = client.fetch_user(&msg.user_id.to_string()).await?;
-							join(
-							Self::handle_content(&client, &user, msg),
-							Self::download_media(
-									&client,
-									&msg.media,
-									&Path::new("data").join(&user.username).join("Stories"),
-								)
-							)
-							.await.0
-						}))
-						.await.into_iter().find(|res| res.is_err()).unwrap_or(Ok(()))
-					}
-				}
+				tagged.handle_message().await
 			}
 		};
+	}
+}
+
+#[async_trait]
+impl Handleable for TaggedMessageType {
+	async fn handle_message(self) -> Result<(), Error> {
+		let client = Client::with_auth().await?;
+
+		match self {
+			TaggedMessageType::PostPublished(msg) => {
+				info!("Post message received: {:?}", msg);
+
+				let (user, content) = try_join(
+					client.fetch_user(&msg.user_id),
+					client.fetch_content(&msg.id)
+				).await?;
+
+				join(
+					handle_content(&content, &client, &user),
+					download_media(
+							&client,
+							&content.unique.media,
+							&Path::new("data").join(&user.username).join(PostContent::get_type()),
+						)
+					)
+					.await.0
+			},
+			TaggedMessageType::Api2ChatMessage(msg) => {
+				info!("Chat message received: {:?}", msg);
+
+				join(
+					handle_content(&msg.content, &client, &msg.from_user),
+					download_media(
+							&client,
+							&msg.content.unique.media,
+							&Path::new("data").join(&msg.from_user.username).join(MessageContent::get_type()),
+						)
+					)
+					.await.0
+			},
+			TaggedMessageType::Stories(msg) => {
+				info!("Story message received: {:?}", msg);
+
+				join_all(msg.iter().map(|story| async {
+					let user = client.fetch_user(&story.user_id.to_string()).await?;
+					join(
+						handle_content(&story.content, &client, &user),
+						download_media(
+								&client,
+								&story.content.unique.media,
+								&Path::new("data").join(&user.username).join(StoryContent::get_type()),
+							)
+					)
+					.await.0
+				}))
+				.await.into_iter().find(|res| res.is_err()).unwrap_or(Ok(()))
+			}
+		}
 	}
 }
