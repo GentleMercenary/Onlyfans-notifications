@@ -1,4 +1,4 @@
-// #![windows_subsystem = "windows"]
+#![windows_subsystem = "windows"]
 #![feature(result_option_inspect)]
 
 mod client;
@@ -7,6 +7,7 @@ mod websocket_client;
 mod deserializers;
 use client::ClientExt;
 use message_types::Error;
+mod settings;
 
 #[macro_use]
 extern crate log;
@@ -16,6 +17,7 @@ use cached::once_cell::sync::OnceCell;
 use chrono::Local;
 use futures::TryFutureExt;
 use reqwest::Client;
+use settings::Settings;
 use simplelog::{Config, LevelFilter, WriteLogger};
 use std::{
 	error,
@@ -33,6 +35,7 @@ use winit::{
 use winrt_toast::{register, Toast, ToastManager};
 
 static MANAGER: OnceCell<ToastManager> = OnceCell::new();
+static SETTINGS: OnceCell<Settings> = OnceCell::new();
 
 fn register_app() -> Result<(), Box<dyn error::Error>> {
 	let aum_id = "OFNotifier";
@@ -119,6 +122,10 @@ enum Events {
 async fn main() -> Result<(), Box<dyn error::Error>> {
 	register_app()?;
 
+	let s = fs::read_to_string("settings.json")?;
+	SETTINGS.set(serde_json::from_str::<Settings>(&s)?)
+	.expect("Settings read properly");
+
 	fs::create_dir_all(&Path::new("logs"))?;
 	let mut log_path = Path::new("logs").join(Local::now().format("%Y%m%d_%H%M%S").to_string());
 	log_path.set_extension(".log");
@@ -191,12 +198,18 @@ async fn main() -> Result<(), Box<dyn error::Error>> {
 #[cfg(test)]
 mod tests {
 	use simplelog::{ColorChoice, TermLogger, TerminalMode};
-	use super::message_types::Handleable;
+	use crate::settings::Whitelist;
+
+use super::message_types::Handleable;
 	use super::*;
 
 	#[tokio::test]
 	async fn test_chat_message() {
 		register_app().unwrap();
+		SETTINGS.set(Settings {
+			notify: Whitelist::Full(true),
+			download: Whitelist::Full(false)
+		}).unwrap();
 
 		TermLogger::init(
 			LevelFilter::Debug,
@@ -237,6 +250,10 @@ mod tests {
 	#[tokio::test]
 	async fn test_post_message() {
 		register_app().unwrap();
+		SETTINGS.set(Settings {
+			notify: Whitelist::Full(true),
+			download: Whitelist::Full(false)
+		}).unwrap();
 
 		TermLogger::init(
 			LevelFilter::Debug,
@@ -266,6 +283,10 @@ mod tests {
 	#[tokio::test]
 	async fn test_story_message() {
 		register_app().unwrap();
+		SETTINGS.set(Settings {
+			notify: Whitelist::Full(true),
+			download: Whitelist::Full(false)
+		}).unwrap();
 
 		TermLogger::init(
 			LevelFilter::Debug,
