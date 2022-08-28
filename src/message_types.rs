@@ -1,6 +1,6 @@
 #![allow(dead_code)]
 
-use crate::MANAGER;
+use crate::{MANAGER, SETTINGS};
 
 use super::client::ClientExt;
 use super::deserializers::*;
@@ -8,7 +8,7 @@ use super::deserializers::*;
 use async_trait::async_trait;
 use chrono::{DateTime, Utc};
 use filetime::{set_file_mtime, FileTime};
-use futures::{future::{join_all, join, try_join}};
+use futures::{future::{join_all, join, try_join}, Future};
 use reqwest::{Client, Url};
 use serde::{Deserialize, Serialize};
 use std::{error, path::Path, process::Command};
@@ -428,53 +428,95 @@ impl Handleable for TaggedMessageType {
 
 		match self {
 			TaggedMessageType::PostPublished(msg) => {
-				info!("Post message received: {:?}", msg);
-
-				let (user, content) = try_join(
-					client.fetch_user(&msg.user_id),
-					client.fetch_content(&msg.id)
-				).await?;
-
-				join(
-					handle_content(&content, &client, &user),
-					download_media(
-							&client,
-							&content.unique.media,
-							&Path::new("data").join(&user.username).join(PostContent::get_type()),
-						)
-					)
-					.await.0
+				msg.handle(&client).await
 			},
 			TaggedMessageType::Api2ChatMessage(msg) => {
-				info!("Chat message received: {:?}", msg);
-
-				join(
-					handle_content(&msg.content, &client, &msg.from_user),
-					download_media(
-							&client,
-							&msg.content.unique.media,
-							&Path::new("data").join(&msg.from_user.username).join(MessageContent::get_type()),
-						)
-					)
-					.await.0
+				msg.handle(&client).await
 			},
 			TaggedMessageType::Stories(msg) => {
-				info!("Story message received: {:?}", msg);
-
-				join_all(msg.iter().map(|story| async {
-					let user = client.fetch_user(&story.user_id.to_string()).await?;
-					join(
-						handle_content(&story.content, &client, &user),
-						download_media(
-								&client,
-								&story.content.unique.media,
-								&Path::new("data").join(&user.username).join(StoryContent::get_type()),
-							)
-					)
-					.await.0
-				}))
+				join_all(msg.iter().map(|story| story.handle(&client) ))
 				.await.into_iter().find(|res| res.is_err()).unwrap_or(Ok(()))
 			}
 		}
+	}
+}
+
+#[async_trait]
+pub trait Message {
+	async fn handle(&self, client: &Client) -> Result<(), Error>;
+	async fn shared(username: &str, notify: impl Future<Output = Result<(), Error>> + Send, download: impl Future<Output = ()> + Send) -> Result <(), Error> {
+		let settings = SETTINGS.wait();
+		if settings.should_download(username) {
+			if settings.should_notify(username) {
+				return join(notify, download).await.0
+			} else {
+				download.await;
+			}
+		} else if settings.should_notify(username) {
+			return notify.await;
+		}
+		
+		Ok(())
+	}
+}
+
+#[async_trait]
+impl Message for PostPublishedMessage {
+	async fn handle(&self, client: &Client) -> Result<(), Error> {
+		info!("Post message received: {:?}", self);
+
+		let (user, content) = try_join(
+			client.fetch_user(&self.user_id),
+			client.fetch_content(&self.id)
+		).await?;
+
+		let username = &user.username;
+		let notify = handle_content(&content, &client, &user);
+		let path = Path::new("data").join(&username).join(PostContent::get_type());
+		let download = download_media(
+					&client,
+					&content.unique.media,
+					&path,
+				);
+
+		Self::shared(&username, notify, download).await
+
+	}
+}
+
+#[async_trait]
+impl Message for ChatMessage {
+	async fn handle(&self, client: &Client) -> Result<(), Error> {
+		info!("Chat message received: {:?}", self);
+
+		let username = &self.from_user.username;
+		let notify = handle_content(&self.content, &client, &self.from_user);
+		let path = Path::new("data").join(&username).join(MessageContent::get_type());
+		let download = download_media(
+					&client,
+					&self.content.unique.media,
+					&path,
+				);
+
+		Self::shared(&username, notify, download).await
+	}
+}
+
+#[async_trait]
+impl Message for StoryMessage {
+	async fn handle(&self, client: &Client) -> Result<(), Error> {
+		info!("Story message received: {:?}", self);
+
+		let user = client.fetch_user(&self.user_id.to_string()).await?;
+		let username = &user.username;
+		let notify = handle_content(&self.content, &client, &user);
+		let path = Path::new("data").join(&username).join(StoryContent::get_type());
+		let download = download_media(
+					&client,
+					&self.content.unique.media,
+					&path,
+				);
+
+		Self::shared(&username, notify, download).await
 	}
 }
