@@ -92,7 +92,7 @@ pub trait ClientExt {
 	async fn ifetch(&self, link: &str) -> Result<Response, Error>;
 	async fn fetch(&self, link: &str) -> Result<Response, Error>;
 	async fn fetch_user(&self, user_id: &str) -> Result<User, Error>;
-	async fn fetch_content(&self, post_id: &str) -> Result<Content<PostContent>, Error>;
+	async fn fetch_content(&self, post_id: &str) -> Result<PostContent, Error>;
 	async fn fetch_file(
 		&self,
 		url: &str,
@@ -217,16 +217,18 @@ impl ClientExt for Client {
 	async fn fetch_user(&self, user_id: &str) -> Result<User, Error> {
 		self.fetch(&format!("https://onlyfans.com/api2/v2/users/{}", user_id))
 			.and_then(|response| response.text().map_err(|err| err.into())).await
+			.inspect(|response| debug!("Got response: {}", response))
 			.and_then(|response| serde_json::from_str(&response).map_err(|err| err.into()))
 			.inspect(|user| info!("Got user: {:?}", user))
 	}
 
-	async fn fetch_content(&self, post_id: &str) -> Result<Content<PostContent>, Error> {
+	async fn fetch_content(&self, post_id: &str) -> Result<PostContent, Error> {
 		self.fetch(&format!(
 			"https://onlyfans.com/api2/v2/posts/{}?skip_users=all",
 			post_id
 		))
 		.and_then(|response| response.text().map_err(|err| err.into())).await
+		.inspect(|response| debug!("Got response: {}", response))
 		.and_then(|response| serde_json::from_str(&response).map_err(|err| err.into()))
 		.inspect(|content| info!("Got content: {:?}", content))
 	}
@@ -238,24 +240,28 @@ impl ClientExt for Client {
 		filename: Option<&str>,
 	) -> Result<PathBuf, Error> {
 		let parsed_url: Url = url.parse()?;
-		let filename = filename
-			.or_else(|| {
-				parsed_url
-					.path_segments()
-					.and_then(|segments| segments.last())
-			})
-			.ok_or("Filename unknown")?;
+		let full = filename
+		.or_else(|| {
+			parsed_url
+				.path_segments()
+				.and_then(|segments| segments.last())
+		})
+		.ok_or("Filename unknown")?;
 
-		let full_path = path.join(filename);
+		let (filename, _) = full.rsplit_once('.').unwrap();
 
+		let full_path = path.join(full);
+		
 		if !full_path.exists() {
 			fs::create_dir_all(&path)?;
-			let mut f = File::create(&full_path)?;
+			let temp_path = path.join(filename.to_owned() + ".part");
+			let mut f = File::create(&temp_path)?;
 
 			self.fetch(&url)
 				.and_then(|response| response.bytes().map_err(|err| err.into())).await
-				.and_then(|bytes| { std::io::copy(&mut Cursor::new(bytes), &mut f).map_err(|err| err.into()) })
-				.inspect(|byte_count| info!("Wrote {} bytes to {:?}", byte_count, full_path))?;
+				.and_then(|bytes| std::io::copy(&mut Cursor::new(bytes), &mut f).map_err(|err| err.into()))
+				.inspect(|byte_count| info!("Wrote {} bytes to {:?}", byte_count, full_path))
+				.and_then(|_| fs::rename(&temp_path, &full_path).map_err(|err| err.into()))?;
 		}
 
 		Ok(full_path)

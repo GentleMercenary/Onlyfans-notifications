@@ -34,8 +34,8 @@ where
 	for c in filtered_str.split(' ') {
 		let mut split_cookie = c.split('=');
 		cookie_map.insert(
-			split_cookie.next().unwrap(),
-			split_cookie.next().unwrap()
+			split_cookie.next().expect("cookie key found"),
+			split_cookie.next().expect("Cookie value found")
 		);
 	}
 
