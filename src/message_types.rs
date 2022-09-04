@@ -8,7 +8,7 @@ use super::deserializers::*;
 use async_trait::async_trait;
 use chrono::{DateTime, Utc};
 use filetime::{set_file_mtime, FileTime};
-use futures::{future::{join_all, join, try_join}, Future};
+use futures::future::{join_all, join, try_join};
 use reqwest::{Client, Url};
 use serde::{Deserialize, Serialize};
 use std::{error, path::Path, process::Command};
@@ -54,15 +54,124 @@ pub struct ConnectedMessage {
 
 #[derive(Deserialize, Debug)]
 #[serde(rename_all = "camelCase")]
-pub struct Content<T: ContentType> {
+pub struct Content<T: ViewableMedia> {
+	id: u64,
 	#[serde(default = "Utc::now")]
 	#[serde(deserialize_with = "str_to_date")]
 	posted_at: DateTime<Utc>,
-	#[serde(flatten)]
-	unique: T
+	media: Vec<T>
 }
 
-async fn handle_content<T: ContentType>(content: &Content<T>, client: &Client, user: &User) -> Result<(), Error> {
+pub trait ContentType {
+	type Media: ViewableMedia + Sync + Send;
+
+	fn get_type() -> &'static str;
+	fn get_media(&self) -> &Vec<Self::Media>;
+	fn to_toast(&self) -> Toast;
+}
+
+#[derive(Deserialize, Debug)]
+#[serde(rename_all = "camelCase")]
+pub struct PostContent {
+	#[serde(deserialize_with = "de_markdown_string")]
+	text: String,
+	price: Option<f32>,
+	#[serde(flatten)]
+	shared: Content<PostMedia>,
+}
+
+impl ContentType for PostContent {
+	type Media = PostMedia;
+
+	fn get_type() -> &'static str {
+		"Posts"
+	}
+
+	fn to_toast(&self) -> Toast {
+		let mut toast = Toast::new();
+
+		info!("{}", &self.text);
+		toast.text2(&self.text);
+
+		if let Some(price) = self.price && price > 0f32 {
+			toast.text3(Text::new(format!("${:.2}", price))
+				.with_placement(TextPlacement::Attribution));
+		}
+
+		toast
+	}
+
+	fn get_media(&self) -> &Vec<Self::Media> {
+		&self.shared.media
+	}
+}
+
+#[derive(Deserialize, Debug)]
+#[serde(rename_all = "camelCase")]
+pub struct MessageContent {
+	#[serde(deserialize_with = "de_markdown_string")]
+	text: String,
+	price: Option<f32>,
+	#[serde(flatten)]
+	shared: Content<MessageMedia>,
+}
+
+impl ContentType for MessageContent {
+	type Media = MessageMedia;
+
+	fn get_type() -> &'static str {
+		"Messages"
+	}
+
+	fn to_toast(&self) -> Toast {
+		let mut toast = Toast::new();
+
+		info!("{}", &self.text);
+		toast.text2(&self.text);
+
+		if let Some(price) = self.price && price > 0f32 {
+			toast.text3(Text::new(format!("${:.2}", price))
+				.with_placement(TextPlacement::Attribution));
+		}
+
+		toast
+	}
+
+	fn get_media(&self) -> &Vec<Self::Media> {
+		&self.shared.media
+	}
+}
+
+#[derive(Deserialize, Debug)]
+#[serde(rename_all = "camelCase")]
+pub struct StoryContent {
+	#[serde(flatten)]
+	shared: Content<StoryMedia>,
+}
+
+impl ContentType for StoryContent {
+	type Media = StoryMedia;
+
+	fn get_type() -> &'static str {
+		"Stories"
+	}
+
+	fn to_toast(&self) -> Toast {
+		Toast::new()
+	}
+
+	fn get_media(&self) -> &Vec<Self::Media> {
+		&self.shared.media
+	}
+}
+
+fn get_thumbnail<T: ViewableMedia>(media: &Vec<T>) -> Option<&str> {
+	media
+	.iter()
+	.find_map(|media| media.get().thumbnail.as_deref().filter(|s| s != &""))
+}
+
+async fn handle_content<T: ContentType>(content: &T, client: &Client, user: &User) -> Result<(), Error> {
 	let parsed = user.avatar.parse::<Url>()?;
 	let filename = parsed
 		.path_segments()
@@ -89,10 +198,10 @@ async fn handle_content<T: ContentType>(content: &Content<T>, client: &Client, u
 
 	info!("Creating notification");
 	let content_type = <T as ContentType>::get_type();
-	let mut toast: Toast = <T as ContentType>::to_toast(&content.unique);
+	let mut toast: Toast = content.to_toast();
 	toast
 		.header(Header::new(content_type, content_type, content_type))
-		.launch(user_path.join(content_type).to_str().unwrap())
+		.launch(user_path.to_str().unwrap())
 		.text1(&user.name).image(
 			1,
 			Image::new_local(avatar)?
@@ -100,7 +209,7 @@ async fn handle_content<T: ContentType>(content: &Content<T>, client: &Client, u
 				.with_placement(ImagePlacement::AppLogoOverride),
 		);
 
-	if let Some(thumb) = <T as ContentType>::get_thumbnail(&content.unique) {
+	if let Some(thumb) = get_thumbnail(content.get_media()) {
 		let thumb = client
 			.fetch_file(&thumb, &user_path.join("thumbs"), None)
 			.await?;
@@ -125,107 +234,6 @@ async fn handle_content<T: ContentType>(content: &Content<T>, client: &Client, u
 		.map_err(|err| err.into())
 }
 
-pub trait ContentType {
-	fn get_type() -> &'static str;
-	fn get_thumbnail(&self) -> Option<&str>;
-	fn to_toast(&self) -> Toast;
-}
-
-#[derive(Deserialize, Debug)]
-#[serde(rename_all = "camelCase")]
-pub struct PostContent {
-	#[serde(deserialize_with = "de_markdown_string")]
-	text: String,
-	price: Option<f32>,
-	media: Vec<Media<PostMedia>>
-}
-
-impl ContentType for PostContent {
-	fn get_type() -> &'static str {
-		"Posts"
-	}
-	
-	fn get_thumbnail(&self) -> Option<&str> {
-		self
-		.media
-		.iter()
-		.find_map(|media| media.unique.preview.as_deref().filter(|s| s != &""))
-	}
-
-	fn to_toast(&self) -> Toast {
-		let mut toast = Toast::new();
-
-		info!("{}", &self.text);
-		toast.text2(&self.text);
-
-		if let Some(price) = self.price && price > 0f32 {
-			toast.text3(Text::new(format!("${:.2}", price))
-				.with_placement(TextPlacement::Attribution));
-		}
-
-		toast
-	}
-}
-
-#[derive(Deserialize, Debug)]
-#[serde(rename_all = "camelCase")]
-pub struct MessageContent {
-	#[serde(deserialize_with = "de_markdown_string")]
-	text: String,
-	price: Option<f32>,
-	media: Vec<Media<MessageMedia>>
-}
-
-impl ContentType for MessageContent {
-	fn get_type() -> &'static str {
-		"Messages"
-	}
-
-	fn get_thumbnail(&self) -> Option<&str> {
-		self
-		.media
-		.iter()
-		.find_map(|media| media.unique.preview.as_deref().filter(|s| s != &""))
-	}
-
-	fn to_toast(&self) -> Toast {
-		let mut toast = Toast::new();
-
-		info!("{}", &self.text);
-		toast.text2(&self.text);
-
-		if let Some(price) = self.price && price > 0f32 {
-			toast.text3(Text::new(format!("${:.2}", price))
-				.with_placement(TextPlacement::Attribution));
-		}
-
-		toast
-	}
-}
-
-#[derive(Deserialize, Debug)]
-#[serde(rename_all = "camelCase")]
-pub struct StoryContent {
-	media: Vec<Media<StoryMedia>>
-}
-
-impl ContentType for StoryContent {
-	fn get_type() -> &'static str {
-		"Stories"
-	}
-
-	fn get_thumbnail(&self) -> Option<&str> {
-		self
-		.media
-		.iter()
-		.find_map(|media| media.unique.files.preview.url.as_deref().filter(|s| s != &""))
-	}
-
-	fn to_toast(&self) -> Toast {
-		Toast::new()
-	}
-}
-
 #[derive(Deserialize, Debug)]
 #[serde(rename_all = "snake_case")]
 pub enum MediaTypes {
@@ -237,15 +245,13 @@ pub enum MediaTypes {
 
 #[derive(Deserialize, Debug)]
 #[serde(rename_all = "camelCase")]
-pub struct Media<T: ViewableMedia> {
+pub struct Media {
 	id: u64,
 	can_view: bool,
 	#[serde(default = "Utc::now")]
 	#[serde(deserialize_with = "str_to_date")]
 	created_at: DateTime<Utc>,
-	#[serde(flatten)]
-	unique: T,
-	#[serde(alias = "type")]
+	#[serde(rename = "type")]
 	media_type: MediaTypes,
 }
 
@@ -256,6 +262,8 @@ pub struct _MediaInner<'a> {
 
 pub trait ViewableMedia {
 	fn get(&self) -> _MediaInner;
+	fn media_type(&self) -> &MediaTypes;
+	fn unix_time(&self) -> i64;
 }
 
 #[derive(Deserialize, Debug)]
@@ -263,6 +271,8 @@ pub trait ViewableMedia {
 pub struct PostMedia {
 	full: Option<String>,
 	preview: Option<String>,
+	#[serde(flatten)]
+	shared: Media
 }
 
 impl ViewableMedia for PostMedia {
@@ -272,13 +282,23 @@ impl ViewableMedia for PostMedia {
 			thumbnail: &self.preview
 		}
 	}
+
+	fn media_type(&self) -> &MediaTypes {
+		&self.shared.media_type
+	}
+
+	fn unix_time(&self) -> i64 {
+		self.shared.created_at.timestamp()
+	}
 }
 
 #[derive(Deserialize, Debug)]
 #[serde(rename_all = "camelCase")]
 pub struct MessageMedia {
 	src: Option<String>,
-	preview: Option<String>
+	preview: Option<String>,
+	#[serde(flatten)]
+	shared: Media
 }
 
 impl ViewableMedia for MessageMedia {
@@ -287,6 +307,14 @@ impl ViewableMedia for MessageMedia {
 			source: &self.src,
 			thumbnail: &self.preview
 		}
+	}
+	
+	fn media_type(&self) -> &MediaTypes {
+		&self.shared.media_type
+	}
+
+	fn unix_time(&self) -> i64 {
+		self.shared.created_at.timestamp()
 	}
 }
 
@@ -304,7 +332,9 @@ struct _Files {
 #[derive(Deserialize, Debug)]
 #[serde(rename_all = "camelCase")]
 pub struct StoryMedia {
-	files: _Files
+	files: _Files,
+	#[serde(flatten)]
+	shared: Media
 }
 
 impl ViewableMedia for StoryMedia {
@@ -313,6 +343,14 @@ impl ViewableMedia for StoryMedia {
 			source: &self.files.source.url,
 			thumbnail: &self.files.preview.url
 		}
+	}
+	
+	fn media_type(&self) -> &MediaTypes {
+		&self.shared.media_type
+	}
+
+	fn unix_time(&self) -> i64 {
+		self.shared.created_at.timestamp()
 	}
 }
 
@@ -336,7 +374,7 @@ pub struct PostPublishedMessage {
 pub struct ChatMessage {
 	from_user: User,
 	#[serde(flatten)]
-	content: Content<MessageContent>
+	content: MessageContent
 
 }
 
@@ -345,7 +383,7 @@ pub struct ChatMessage {
 pub struct StoryMessage {
 	user_id: u32,
 	#[serde(flatten)]
-	content: Content<StoryContent>
+	content: StoryContent
 }
 
 #[derive(Deserialize, Debug)]
@@ -364,13 +402,13 @@ pub enum MessageType {
 	Error(ErrorMessage),
 }
 
-async fn download_media<T: ViewableMedia>(client: &Client, media: &Vec<Media<T>>, path: &Path) {
+async fn download_media<T: ViewableMedia>(client: &Client, media: &Vec<T>, path: &Path) {
 	join_all(media.iter().filter_map(|media| {
-		media.unique.get().source.as_ref().map(|url| async move {
+		media.get().source.as_ref().map(|url| async move {
 			client
 				.fetch_file(
 					&url,
-					&path.join(match media.media_type {
+					&path.join(match media.media_type() {
 						MediaTypes::Photo => "Images",
 						MediaTypes::Audio => "Audios",
 						MediaTypes::Video | MediaTypes::Gif => "Videos",
@@ -382,7 +420,7 @@ async fn download_media<T: ViewableMedia>(client: &Client, media: &Vec<Media<T>>
 				.and_then(|path| {
 					set_file_mtime(
 							path,
-							FileTime::from_unix_time(media.created_at.timestamp(), 0),
+							FileTime::from_unix_time(media.unix_time(), 0),
 						)
 						.inspect_err(|err| error!("{err}"))
 						.map_err(|err| err.into())
@@ -444,8 +482,19 @@ impl Handleable for TaggedMessageType {
 #[async_trait]
 pub trait Message {
 	async fn handle(&self, client: &Client) -> Result<(), Error>;
-	async fn shared(username: &str, notify: impl Future<Output = Result<(), Error>> + Send, download: impl Future<Output = ()> + Send) -> Result <(), Error> {
+	async fn shared<T: ContentType + Send + Sync>(user: &User, content: &T, client: &Client) -> Result <(), Error> {
 		let settings = SETTINGS.wait();
+
+		let username = &user.username;
+		let notify = handle_content(content, &client, &user);
+		let path = Path::new("data").join(&username).join(PostContent::get_type());
+		let download = download_media(
+					&client,
+					&content.get_media(),
+					&path,
+				);
+
+
 		if settings.should_download(username) {
 			if settings.should_notify(username) {
 				return join(notify, download).await.0
@@ -470,16 +519,7 @@ impl Message for PostPublishedMessage {
 			client.fetch_content(&self.id)
 		).await?;
 
-		let username = &user.username;
-		let notify = handle_content(&content, &client, &user);
-		let path = Path::new("data").join(&username).join(PostContent::get_type());
-		let download = download_media(
-					&client,
-					&content.unique.media,
-					&path,
-				);
-
-		Self::shared(&username, notify, download).await
+		Self::shared(&user, &content, client).await
 
 	}
 }
@@ -488,17 +528,7 @@ impl Message for PostPublishedMessage {
 impl Message for ChatMessage {
 	async fn handle(&self, client: &Client) -> Result<(), Error> {
 		info!("Chat message received: {:?}", self);
-
-		let username = &self.from_user.username;
-		let notify = handle_content(&self.content, &client, &self.from_user);
-		let path = Path::new("data").join(&username).join(MessageContent::get_type());
-		let download = download_media(
-					&client,
-					&self.content.unique.media,
-					&path,
-				);
-
-		Self::shared(&username, notify, download).await
+		Self::shared(&self.from_user, &self.content, client).await
 	}
 }
 
@@ -508,15 +538,6 @@ impl Message for StoryMessage {
 		info!("Story message received: {:?}", self);
 
 		let user = client.fetch_user(&self.user_id.to_string()).await?;
-		let username = &user.username;
-		let notify = handle_content(&self.content, &client, &user);
-		let path = Path::new("data").join(&username).join(StoryContent::get_type());
-		let download = download_media(
-					&client,
-					&self.content.unique.media,
-					&path,
-				);
-
-		Self::shared(&username, notify, download).await
+		Self::shared(&user, &self.content, client).await
 	}
 }

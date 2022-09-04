@@ -197,7 +197,10 @@ async fn main() -> Result<(), Box<dyn error::Error>> {
 
 #[cfg(test)]
 mod tests {
-	use simplelog::{ColorChoice, TermLogger, TerminalMode};
+	use std::thread::sleep;
+use std::time::Duration;
+
+use simplelog::{ColorChoice, TermLogger, TerminalMode};
 	use crate::settings::Whitelist;
 
 use super::message_types::Handleable;
@@ -220,6 +223,7 @@ use super::message_types::Handleable;
 		.unwrap();
 
 		let incoming = r#"{
+			"api2_chat_message": {
 				"text": "This is a message<br />\n to test <a href = \"/onlyfans\">MARKDOWN parsing</a> 👌<br />\n in notifications 💯",
 				"price": 3.99,
 				"fromUser": {
@@ -237,7 +241,8 @@ use super::message_types::Handleable;
 						"type": "photo"
 					}
 				]
-			}"#;
+			}
+		}"#;
 
 		let msg = serde_json::from_str::<message_types::MessageType>(&incoming).unwrap();
 		assert!(matches!(
@@ -245,6 +250,7 @@ use super::message_types::Handleable;
 			message_types::MessageType::Tagged(message_types::TaggedMessageType::Api2ChatMessage(_))
 		));
 		msg.handle_message().await.unwrap();
+		sleep(Duration::from_millis(5000));
 	}
 
 	#[tokio::test]
@@ -278,6 +284,7 @@ use super::message_types::Handleable;
 			message_types::MessageType::Tagged(message_types::TaggedMessageType::PostPublished(_))
 		));
 		msg.handle_message().await.unwrap();
+		sleep(Duration::from_millis(5000));
 	}
 
 	#[tokio::test]
@@ -326,5 +333,6 @@ use super::message_types::Handleable;
 			message_types::MessageType::Tagged(message_types::TaggedMessageType::Stories(_))
 		));
 		msg.handle_message().await.unwrap();
+		sleep(Duration::from_millis(5000));
 	}
 }
