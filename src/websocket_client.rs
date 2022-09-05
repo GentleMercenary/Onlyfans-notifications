@@ -114,12 +114,6 @@ impl WebSocketClient {
 			.await
 			.ok_or("Message queue exhausted".into())
 			.and_then(|m| m.map(|msg| msg.to_string()).map_err(|err| err.into()))
-			.and_then(|s| {
-				if s == "{\"online\":[]}" {
-					return Err("".into());
-				}
-
-				serde_json::from_str::<message_types::MessageType>(&s).map_err(|err| err.into())
-			})
+			.and_then(|s| serde_json::from_str::<message_types::MessageType>(&s).map_err(|err| err.into()))
 	}
 }
