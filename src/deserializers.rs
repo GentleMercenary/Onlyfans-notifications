@@ -1,5 +1,6 @@
-use std::collections::HashMap;
+use std::{collections::HashMap};
 
+use serde::de::Error;
 use chrono::{DateTime, Utc};
 use serde::{Deserializer, Deserialize};
 use strip_markdown::*;
@@ -28,14 +29,14 @@ pub fn parse_cookie<'de, D>(deserializer: D) -> Result<Cookie, D::Error>
 where
 	D: Deserializer<'de>,
 {
-	let s: &str = Deserialize::deserialize(deserializer)?;
+	let s = non_empty_str(deserializer)?;
 	let mut cookie_map: HashMap<&str, &str> = HashMap::new();
 	let filtered_str = s.replace(';', "");
 	for c in filtered_str.split(' ') {
-		let mut split_cookie = c.split('=');
+		let (k, v) = c.split_once('=').expect("Key/Value cookie pair found");
 		cookie_map.insert(
-			split_cookie.next().expect("cookie key found"),
-			split_cookie.next().expect("Cookie value found")
+			k,
+			v
 		);
 	}
 
@@ -44,4 +45,23 @@ where
 		sess: cookie_map.get("sess").unwrap_or(&"").to_string(),
 		auth_hash: cookie_map.get("auth_hash").unwrap_or(&"").to_string(),
 	})
+}
+
+pub fn non_empty_str<'de, D>(deserializer: D) -> Result<&'de str, D::Error>
+where
+	D: Deserializer<'de>,
+{
+	let s: &str = Deserialize::deserialize(deserializer)?;
+	(!s.is_empty())
+	.then_some(s)
+	.ok_or("Empty string").map_err(D::Error::custom)
+
+}
+
+pub fn non_empty_string<'de, D>(deserializer: D) -> Result<String, D::Error>
+where
+	D: Deserializer<'de>,
+{
+	non_empty_str(deserializer)
+	.map(|s| s.to_owned())
 }

@@ -230,7 +230,7 @@ async fn handle_content<T: ContentType>(content: &T, client: &Client, user: &Use
 				error!("Could't show notification: {:?}", e);
 			})),
 		)
-		.inspect_err(|err| error!("{err}"))
+		.inspect_err(|err| error!("Error showing notification: {err}"))
 		.map_err(|err| err.into())
 }
 
@@ -422,7 +422,7 @@ async fn download_media<T: ViewableMedia>(client: &Client, media: &Vec<T>, path:
 							path,
 							FileTime::from_unix_time(media.unix_time(), 0),
 						)
-						.inspect_err(|err| error!("{err}"))
+						.inspect_err(|err| error!("Error setting file modify time: {err}"))
 						.map_err(|err| err.into())
 				})
 		})

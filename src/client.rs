@@ -1,7 +1,7 @@
 #![allow(dead_code)]
 
 use super::message_types::*;
-use super::deserializers::parse_cookie;
+use super::deserializers::{parse_cookie, non_empty_string};
 
 use async_trait::async_trait;
 use cached::proc_macro::once;
@@ -58,7 +58,9 @@ struct _AuthParams {
 struct AuthParams {
 	#[serde(deserialize_with = "parse_cookie")]
 	cookie: Cookie,
+	#[serde(deserialize_with = "non_empty_string")]
 	x_bc: String,
+	#[serde(deserialize_with = "non_empty_string")]
 	user_agent: String,
 }
 
@@ -68,17 +70,18 @@ async fn get_params() -> Result<(StaticParams, AuthParams), Error> {
 		reqwest::get(
 			"https://raw.githubusercontent.com/DATAHOARDERS/dynamic-rules/main/onlyfans.json",
 		)
+		.inspect_err(|err| error!("Error getting dynamic rules: {err:?}"))
 		.and_then(|response| response.text()).await
 		.and_then(|data| {
 			Ok(serde_json::from_str::<StaticParams>(&data)
 			.inspect(|params| debug!("{params:?}"))
-			.inspect_err(|err| error!("{err:?}")))
+			.inspect_err(|err| error!("Error reading dynamic rules: {err:?}")))
 		})??,
 		fs::read_to_string("auth.json")
 		.inspect_err(|err| error!("{err:?}"))
 		.and_then(|data| {
 			serde_json::from_str::<_AuthParams>(&data)
-				.inspect_err(|err| error!("{err:?}"))
+				.inspect_err(|err| error!("Error reading auth data: {err:?}"))
 				.map(|outer| outer.auth)
 				.inspect(|params| debug!("{params:?}"))
 				.map_err(|err| err.into())
@@ -202,7 +205,7 @@ impl ClientExt for Client {
 			.send()
 			.await
 			.and_then(|response| response.error_for_status())
-			.inspect_err(|err| error!("{err:?}"))
+			.inspect_err(|err| error!("Error fetching {link}: {err:?}"))
 			.map_err(|err| err.into())
 	}
 
@@ -220,6 +223,7 @@ impl ClientExt for Client {
 			.inspect(|response| debug!("Got response: {}", response))
 			.and_then(|response| serde_json::from_str(&response).map_err(|err| err.into()))
 			.inspect(|user| info!("Got user: {:?}", user))
+			.inspect_err(|err| error!("Error reading user {user_id}: {err:?}"))
 	}
 
 	async fn fetch_content(&self, post_id: &str) -> Result<PostContent, Error> {
@@ -231,6 +235,7 @@ impl ClientExt for Client {
 		.inspect(|response| debug!("Got response: {}", response))
 		.and_then(|response| serde_json::from_str(&response).map_err(|err| err.into()))
 		.inspect(|content| info!("Got content: {:?}", content))
+		.inspect_err(|err| error!("Error reading content {post_id}: {err:?}"))
 	}
 
 	async fn fetch_file(
@@ -261,7 +266,9 @@ impl ClientExt for Client {
 				.and_then(|response| response.bytes().map_err(|err| err.into())).await
 				.and_then(|bytes| std::io::copy(&mut Cursor::new(bytes), &mut f).map_err(|err| err.into()))
 				.inspect(|byte_count| info!("Wrote {} bytes to {:?}", byte_count, full_path))
-				.and_then(|_| fs::rename(&temp_path, &full_path).map_err(|err| err.into()))?;
+				.inspect_err(|err| error!("Error writing file: {err:?}"))
+				.and_then(|_| fs::rename(&temp_path, &full_path).map_err(|err| err.into()))
+				.inspect_err(|err| error!("Error renaming file: {err:?}"))?;
 		}
 
 		Ok(full_path)
