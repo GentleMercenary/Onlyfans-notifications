@@ -19,6 +19,7 @@ use futures::TryFutureExt;
 use reqwest::Client;
 use settings::Settings;
 use simplelog::{Config, LevelFilter, WriteLogger};
+use tempdir::TempDir;
 use std::{
 	error,
 	fs::{self, File},
@@ -36,6 +37,7 @@ use winrt_toast::{register, Toast, ToastManager};
 
 static MANAGER: OnceCell<ToastManager> = OnceCell::new();
 static SETTINGS: OnceCell<Settings> = OnceCell::new();
+static TEMPDIR: OnceCell<TempDir> = OnceCell::new();
 
 fn register_app() -> Result<(), Box<dyn error::Error>> {
 	let aum_id = "OFNotifier";
@@ -44,6 +46,9 @@ fn register_app() -> Result<(), Box<dyn error::Error>> {
 	MANAGER
 		.set(ToastManager::new(aum_id))
 		.expect("Global toast manager set");
+
+	TEMPDIR.set(TempDir::new("OF_thumbs")?)
+	.expect("Temporary thumbnail created succesfully");
 	Ok(())
 }
 
@@ -128,7 +133,7 @@ async fn main() -> Result<(), Box<dyn error::Error>> {
 
 	fs::create_dir_all(&Path::new("logs"))?;
 	let mut log_path = Path::new("logs").join(Local::now().format("%Y%m%d_%H%M%S").to_string());
-	log_path.set_extension(".log");
+	log_path.set_extension("log");
 
 	WriteLogger::init(
 		LevelFilter::Info,
@@ -187,6 +192,7 @@ async fn main() -> Result<(), Box<dyn error::Error>> {
 				Events::Quit => {
 					info!("Closing application");
 					cancel_token.cancel();
+					MANAGER.wait().clear().unwrap();
 					*control_flow = ControlFlow::Exit;
 				}
 			},
@@ -296,7 +302,7 @@ use super::message_types::Handleable;
 		}).unwrap();
 
 		TermLogger::init(
-			LevelFilter::Debug,
+			LevelFilter::Info,
 			Config::default(),
 			TerminalMode::Mixed,
 			ColorChoice::Auto,

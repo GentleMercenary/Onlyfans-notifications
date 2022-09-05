@@ -1,6 +1,6 @@
 #![allow(dead_code)]
 
-use crate::{MANAGER, SETTINGS};
+use crate::{MANAGER, SETTINGS, TEMPDIR};
 
 use super::client::ClientExt;
 use super::deserializers::*;
@@ -211,7 +211,7 @@ async fn handle_content<T: ContentType>(content: &T, client: &Client, user: &Use
 
 	if let Some(thumb) = get_thumbnail(content.get_media()) {
 		let thumb = client
-			.fetch_file(&thumb, &user_path.join("thumbs"), None)
+			.fetch_file(&thumb, TEMPDIR.wait().path(), None)
 			.await?;
 		toast.image(2, Image::new_local(thumb)?);
 	}
