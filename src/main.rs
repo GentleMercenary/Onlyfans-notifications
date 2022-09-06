@@ -2,9 +2,9 @@
 #![feature(result_option_inspect)]
 
 mod client;
+mod deserializers;
 mod message_types;
 mod websocket_client;
-mod deserializers;
 use client::ClientExt;
 use message_types::Error;
 mod settings;
@@ -19,13 +19,13 @@ use futures::TryFutureExt;
 use reqwest::Client;
 use settings::Settings;
 use simplelog::{Config, LevelFilter, WriteLogger};
-use tempdir::TempDir;
 use std::{
 	error,
 	fs::{self, File},
 	path::Path,
 	sync::Arc,
 };
+use tempdir::TempDir;
 use tokio::{select, task};
 use tokio_util::sync::CancellationToken;
 use trayicon::{Icon, MenuBuilder, TrayIconBuilder};
@@ -47,8 +47,9 @@ fn register_app() -> Result<(), Box<dyn error::Error>> {
 		.set(ToastManager::new(aum_id))
 		.expect("Global toast manager set");
 
-	TEMPDIR.set(TempDir::new("OF_thumbs")?)
-	.expect("Temporary thumbnail created succesfully");
+	TEMPDIR
+		.set(TempDir::new("OF_thumbs")?)
+		.expect("Temporary thumbnail created succesfully");
 	Ok(())
 }
 
@@ -128,8 +129,9 @@ async fn main() -> Result<(), Box<dyn error::Error>> {
 	register_app()?;
 
 	let s = fs::read_to_string("settings.json")?;
-	SETTINGS.set(serde_json::from_str::<Settings>(&s)?)
-	.expect("Settings read properly");
+	SETTINGS
+		.set(serde_json::from_str::<Settings>(&s)?)
+		.expect("Settings read properly");
 
 	fs::create_dir_all(&Path::new("logs"))?;
 	let mut log_path = Path::new("logs").join(Local::now().format("%Y%m%d_%H%M%S").to_string());
@@ -204,21 +206,23 @@ async fn main() -> Result<(), Box<dyn error::Error>> {
 #[cfg(test)]
 mod tests {
 	use std::thread::sleep;
-use std::time::Duration;
+	use std::time::Duration;
 
-use simplelog::{ColorChoice, TermLogger, TerminalMode};
 	use crate::settings::Whitelist;
+	use simplelog::{ColorChoice, TermLogger, TerminalMode};
 
-use super::message_types::Handleable;
+	use super::message_types::Handleable;
 	use super::*;
 
 	#[tokio::test]
 	async fn test_chat_message() {
 		register_app().unwrap();
-		SETTINGS.set(Settings {
-			notify: Whitelist::Full(true),
-			download: Whitelist::Full(false)
-		}).unwrap();
+		SETTINGS
+			.set(Settings {
+				notify: Whitelist::Full(true),
+				download: Whitelist::Full(false),
+			})
+			.unwrap();
 
 		TermLogger::init(
 			LevelFilter::Debug,
@@ -253,7 +257,9 @@ use super::message_types::Handleable;
 		let msg = serde_json::from_str::<message_types::MessageType>(&incoming).unwrap();
 		assert!(matches!(
 			msg,
-			message_types::MessageType::Tagged(message_types::TaggedMessageType::Api2ChatMessage(_))
+			message_types::MessageType::Tagged(message_types::TaggedMessageType::Api2ChatMessage(
+				_
+			))
 		));
 		msg.handle_message().await.unwrap();
 		sleep(Duration::from_millis(5000));
@@ -262,10 +268,12 @@ use super::message_types::Handleable;
 	#[tokio::test]
 	async fn test_post_message() {
 		register_app().unwrap();
-		SETTINGS.set(Settings {
-			notify: Whitelist::Full(true),
-			download: Whitelist::Full(false)
-		}).unwrap();
+		SETTINGS
+			.set(Settings {
+				notify: Whitelist::Full(true),
+				download: Whitelist::Full(false),
+			})
+			.unwrap();
 
 		TermLogger::init(
 			LevelFilter::Debug,
@@ -296,10 +304,12 @@ use super::message_types::Handleable;
 	#[tokio::test]
 	async fn test_story_message() {
 		register_app().unwrap();
-		SETTINGS.set(Settings {
-			notify: Whitelist::Full(true),
-			download: Whitelist::Full(false)
-		}).unwrap();
+		SETTINGS
+			.set(Settings {
+				notify: Whitelist::Full(true),
+				download: Whitelist::Full(false),
+			})
+			.unwrap();
 
 		TermLogger::init(
 			LevelFilter::Info,
