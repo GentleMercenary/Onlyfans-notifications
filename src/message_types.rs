@@ -8,7 +8,7 @@ use super::deserializers::*;
 use async_trait::async_trait;
 use chrono::{DateTime, Utc};
 use filetime::{set_file_mtime, FileTime};
-use futures::future::{join_all, join, try_join};
+use futures::future::{join, join_all, try_join};
 use reqwest::{Client, Url};
 use serde::{Deserialize, Serialize};
 use std::{error, path::Path, process::Command};
@@ -59,7 +59,7 @@ pub struct Content<T: ViewableMedia> {
 	#[serde(default = "Utc::now")]
 	#[serde(deserialize_with = "str_to_date")]
 	posted_at: DateTime<Utc>,
-	media: Vec<T>
+	media: Vec<T>,
 }
 
 pub trait ContentType {
@@ -167,11 +167,15 @@ impl ContentType for StoryContent {
 
 fn get_thumbnail<T: ViewableMedia>(media: &Vec<T>) -> Option<&str> {
 	media
-	.iter()
-	.find_map(|media| media.get().thumbnail.as_deref().filter(|s| s != &""))
+		.iter()
+		.find_map(|media| media.get().thumbnail.as_deref().filter(|s| s != &""))
 }
 
-async fn handle_content<T: ContentType>(content: &T, client: &Client, user: &User) -> Result<(), Error> {
+async fn handle_content<T: ContentType>(
+	content: &T,
+	client: &Client,
+	user: &User,
+) -> Result<(), Error> {
 	let parsed = user.avatar.parse::<Url>()?;
 	let filename = parsed
 		.path_segments()
@@ -202,7 +206,8 @@ async fn handle_content<T: ContentType>(content: &T, client: &Client, user: &Use
 	toast
 		.header(Header::new(content_type, content_type, content_type))
 		.launch(user_path.to_str().unwrap())
-		.text1(&user.name).image(
+		.text1(&user.name)
+		.image(
 			1,
 			Image::new_local(avatar)?
 				.with_hint_crop(ImageHintCrop::Circle)
@@ -257,7 +262,7 @@ pub struct Media {
 
 pub struct _MediaInner<'a> {
 	source: &'a Option<String>,
-	thumbnail: &'a Option<String>
+	thumbnail: &'a Option<String>,
 }
 
 pub trait ViewableMedia {
@@ -272,14 +277,14 @@ pub struct PostMedia {
 	full: Option<String>,
 	preview: Option<String>,
 	#[serde(flatten)]
-	shared: Media
+	shared: Media,
 }
 
 impl ViewableMedia for PostMedia {
 	fn get(&self) -> _MediaInner {
 		_MediaInner {
 			source: &self.full,
-			thumbnail: &self.preview
+			thumbnail: &self.preview,
 		}
 	}
 
@@ -298,17 +303,17 @@ pub struct MessageMedia {
 	src: Option<String>,
 	preview: Option<String>,
 	#[serde(flatten)]
-	shared: Media
+	shared: Media,
 }
 
 impl ViewableMedia for MessageMedia {
 	fn get(&self) -> _MediaInner {
 		_MediaInner {
 			source: &self.src,
-			thumbnail: &self.preview
+			thumbnail: &self.preview,
 		}
 	}
-	
+
 	fn media_type(&self) -> &MediaTypes {
 		&self.shared.media_type
 	}
@@ -320,13 +325,13 @@ impl ViewableMedia for MessageMedia {
 
 #[derive(Deserialize, Debug)]
 struct _FilesInner {
-	url: Option<String>
+	url: Option<String>,
 }
 
 #[derive(Deserialize, Debug)]
 struct _Files {
 	source: _FilesInner,
-	preview: _FilesInner
+	preview: _FilesInner,
 }
 
 #[derive(Deserialize, Debug)]
@@ -334,17 +339,17 @@ struct _Files {
 pub struct StoryMedia {
 	files: _Files,
 	#[serde(flatten)]
-	shared: Media
+	shared: Media,
 }
 
 impl ViewableMedia for StoryMedia {
 	fn get(&self) -> _MediaInner {
 		_MediaInner {
 			source: &self.files.source.url,
-			thumbnail: &self.files.preview.url
+			thumbnail: &self.files.preview.url,
 		}
 	}
-	
+
 	fn media_type(&self) -> &MediaTypes {
 		&self.shared.media_type
 	}
@@ -374,8 +379,7 @@ pub struct PostPublishedMessage {
 pub struct ChatMessage {
 	from_user: User,
 	#[serde(flatten)]
-	content: MessageContent
-
+	content: MessageContent,
 }
 
 #[derive(Deserialize, Debug)]
@@ -383,7 +387,7 @@ pub struct ChatMessage {
 pub struct StoryMessage {
 	user_id: u32,
 	#[serde(flatten)]
-	content: StoryContent
+	content: StoryContent,
 }
 
 #[derive(Deserialize, Debug)]
@@ -418,10 +422,7 @@ async fn download_media<T: ViewableMedia>(client: &Client, media: &Vec<T>, path:
 				.await
 				.inspect_err(|err| error!("Download failed: {err}"))
 				.and_then(|path| {
-					set_file_mtime(
-							path,
-							FileTime::from_unix_time(media.unix_time(), 0),
-						)
+					set_file_mtime(path, FileTime::from_unix_time(media.unix_time(), 0))
 						.inspect_err(|err| error!("Error setting file modify time: {err}"))
 						.map_err(|err| err.into())
 				})
@@ -452,9 +453,7 @@ impl Handleable for MessageType {
 				error!("Error message received: {:?}", msg);
 				Err(format!("websocket received error message with code {}", msg.error).into())
 			}
-			Self::Tagged(tagged) => {
-				tagged.handle_message().await
-			}
+			Self::Tagged(tagged) => tagged.handle_message().await,
 		};
 	}
 }
@@ -465,15 +464,14 @@ impl Handleable for TaggedMessageType {
 		let client = Client::with_auth().await?;
 
 		match self {
-			TaggedMessageType::PostPublished(msg) => {
-				msg.handle(&client).await
-			},
-			TaggedMessageType::Api2ChatMessage(msg) => {
-				msg.handle(&client).await
-			},
+			TaggedMessageType::PostPublished(msg) => msg.handle(&client).await,
+			TaggedMessageType::Api2ChatMessage(msg) => msg.handle(&client).await,
 			TaggedMessageType::Stories(msg) => {
-				join_all(msg.iter().map(|story| story.handle(&client) ))
-				.await.into_iter().find(|res| res.is_err()).unwrap_or(Ok(()))
+				join_all(msg.iter().map(|story| story.handle(&client)))
+					.await
+					.into_iter()
+					.find(|res| res.is_err())
+					.unwrap_or(Ok(()))
 			}
 		}
 	}
@@ -482,29 +480,30 @@ impl Handleable for TaggedMessageType {
 #[async_trait]
 pub trait Message {
 	async fn handle(&self, client: &Client) -> Result<(), Error>;
-	async fn shared<T: ContentType + Send + Sync>(user: &User, content: &T, client: &Client) -> Result <(), Error> {
+	async fn shared<T: ContentType + Send + Sync>(
+		user: &User,
+		content: &T,
+		client: &Client,
+	) -> Result<(), Error> {
 		let settings = SETTINGS.wait();
 
 		let username = &user.username;
 		let notify = handle_content(content, &client, &user);
-		let path = Path::new("data").join(&username).join(PostContent::get_type());
-		let download = download_media(
-					&client,
-					&content.get_media(),
-					&path,
-				);
-
+		let path = Path::new("data")
+			.join(&username)
+			.join(PostContent::get_type());
+		let download = download_media(&client, &content.get_media(), &path);
 
 		if settings.should_download(username) {
 			if settings.should_notify(username) {
-				return join(notify, download).await.0
+				return join(notify, download).await.0;
 			} else {
 				download.await;
 			}
 		} else if settings.should_notify(username) {
 			return notify.await;
 		}
-		
+
 		Ok(())
 	}
 }
@@ -516,11 +515,11 @@ impl Message for PostPublishedMessage {
 
 		let (user, content) = try_join(
 			client.fetch_user(&self.user_id),
-			client.fetch_content(&self.id)
-		).await?;
+			client.fetch_content(&self.id),
+		)
+		.await?;
 
 		Self::shared(&user, &content, client).await
-
 	}
 }
 
