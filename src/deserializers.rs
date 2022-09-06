@@ -41,8 +41,8 @@ where
 	}
 
 	Ok(Cookie {
-		auth_id: cookie_map.get("auth_id").unwrap_or(&"").to_string(),
-		sess: cookie_map.get("sess").unwrap_or(&"").to_string(),
+		auth_id: cookie_map.get("auth_id").ok_or("'auth_id' missing from cookie auth parameter").map_err(D::Error::custom)?.to_string(),
+		sess: cookie_map.get("sess").ok_or("'sess' missing from cookie auth parameter").map_err(D::Error::custom)?.to_string(),
 		auth_hash: cookie_map.get("auth_hash").unwrap_or(&"").to_string(),
 	})
 }
