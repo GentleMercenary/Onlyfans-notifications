@@ -3,21 +3,23 @@ use super::message_types::{self, Error, Handleable};
 use futures_util::{SinkExt, StreamExt};
 use std::time::Duration;
 use tokio::{net::TcpStream, time::sleep};
-use tokio_tungstenite::{connect_async, MaybeTlsStream, WebSocketStream};
+use tokio_tungstenite::{connect_async, MaybeTlsStream, WebSocketStream, tungstenite::Message};
 
 pub struct WebSocketClient {
 	socket: Option<WebSocketStream<MaybeTlsStream<TcpStream>>>,
-	heartbeat: String,
+	heartbeat: Message,
 }
 
 impl WebSocketClient {
 	pub fn new() -> Result<Self, Error> {
 		Ok(Self {
 			socket: None,
-			heartbeat: serde_json::to_string(&message_types::GetOnlinesMessage {
-				act: "get_onlines",
-				ids: &[],
-			})?,
+			heartbeat: Message::Text(
+				serde_json::to_string(&message_types::GetOnlinesMessage {
+					act: "get_onlines",
+					ids: &[],
+				})?
+			),
 		})
 	}
 
@@ -98,7 +100,8 @@ impl WebSocketClient {
 					}
 
 					let writer = self.socket.as_mut().ok_or("")?;
-					writer.send(self.heartbeat.to_owned().into()).await?;
+					debug!("Sending heartbeat");
+					writer.send(self.heartbeat.clone()).await?;
 					msg_received = false;
 				}
 			}
@@ -109,11 +112,14 @@ impl WebSocketClient {
 
 	async fn wait_for_message(&mut self) -> Result<message_types::MessageType, Error> {
 		let reader = self.socket.as_mut().unwrap();
-		reader
+		let msg = reader
 			.next()
 			.await
-			.ok_or("Message queue exhausted".into())
-			.and_then(|m| m.map(|msg| msg.to_string()).map_err(|err| err.into()))
-			.and_then(|s| serde_json::from_str::<message_types::MessageType>(&s).map_err(|err| err.into()))
+			.ok_or::<Error>("Message queue exhausted".into())
+			.and_then(|m| m.map_err(|err| err.into()))?;
+
+		msg.to_text().map_err(|err| err.into())
+		.inspect(|s| debug!("Received message: {s}"))
+		.and_then(|s| serde_json::from_str::<message_types::MessageType>(s).map_err(|err| err.into()))
 	}
 }

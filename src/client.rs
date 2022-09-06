@@ -6,13 +6,13 @@ use super::deserializers::{parse_cookie, non_empty_string};
 use async_trait::async_trait;
 use cached::proc_macro::once;
 use crypto::{digest::Digest, sha1::Sha1};
-use futures::TryFutureExt;
+use futures::{TryFutureExt, StreamExt};
 use reqwest::{cookie::Jar, header, Client, Response, Url};
 use serde::{Deserialize};
 use std::{
 	fmt, fs,
 	fs::File,
-	io::Cursor,
+	io::Write,
 	path::{Path, PathBuf},
 	sync::Arc,
 	time::{Duration, SystemTime, UNIX_EPOCH},
@@ -67,25 +67,16 @@ struct AuthParams {
 #[once(time = 10, result = true, sync_writes = true)]
 async fn get_params() -> Result<(StaticParams, AuthParams), Error> {
 	Ok((
-		reqwest::get(
-			"https://raw.githubusercontent.com/DATAHOARDERS/dynamic-rules/main/onlyfans.json",
-		)
-		.inspect_err(|err| error!("Error getting dynamic rules: {err:?}"))
-		.and_then(|response| response.text()).await
-		.and_then(|data| {
-			Ok(serde_json::from_str::<StaticParams>(&data)
-			.inspect(|params| debug!("{params:?}"))
-			.inspect_err(|err| error!("Error reading dynamic rules: {err:?}")))
-		})??,
+		reqwest::get("https://raw.githubusercontent.com/DATAHOARDERS/dynamic-rules/main/onlyfans.json")
+			.inspect_err(|err| error!("Error getting dynamic rules: {err:?}"))
+			.and_then(|response| response.json::<StaticParams>()).await
+			.inspect_err(|err| error!("Error reading dynamic rules: {err:?}"))?,
 		fs::read_to_string("auth.json")
-		.inspect_err(|err| error!("{err:?}"))
-		.and_then(|data| {
-			serde_json::from_str::<_AuthParams>(&data)
-				.inspect_err(|err| error!("Error reading auth data: {err:?}"))
-				.map(|outer| outer.auth)
-				.inspect(|params| debug!("{params:?}"))
-				.map_err(|err| err.into())
-		})?,
+			.inspect_err(|err| error!("Error reading auth file: {err:?}"))
+			.and_then(|data| serde_json::from_str::<_AuthParams>(&data).map_err(|err| err.into()))
+			.inspect_err(|err| error!("Error reading auth data: {err:?}"))
+			.map(|outer| outer.auth)
+			.inspect(|params| debug!("{params:?}"))?
 	))
 }
 
@@ -219,21 +210,14 @@ impl ClientExt for Client {
 
 	async fn fetch_user(&self, user_id: &str) -> Result<User, Error> {
 		self.fetch(&format!("https://onlyfans.com/api2/v2/users/{}", user_id))
-			.and_then(|response| response.text().map_err(|err| err.into())).await
-			.inspect(|response| debug!("Got response: {}", response))
-			.and_then(|response| serde_json::from_str(&response).map_err(|err| err.into()))
+			.and_then(|response| response.json::<User>().map_err(|err| err.into())).await
 			.inspect(|user| info!("Got user: {:?}", user))
 			.inspect_err(|err| error!("Error reading user {user_id}: {err:?}"))
 	}
 
 	async fn fetch_content(&self, post_id: &str) -> Result<PostContent, Error> {
-		self.fetch(&format!(
-			"https://onlyfans.com/api2/v2/posts/{}?skip_users=all",
-			post_id
-		))
-		.and_then(|response| response.text().map_err(|err| err.into())).await
-		.inspect(|response| debug!("Got response: {}", response))
-		.and_then(|response| serde_json::from_str(&response).map_err(|err| err.into()))
+		self.fetch(&format!("https://onlyfans.com/api2/v2/posts/{}?skip_users=all", post_id))
+		.and_then(|response| response.json::<PostContent>().map_err(|err| err.into())).await
 		.inspect(|content| info!("Got content: {:?}", content))
 		.inspect_err(|err| error!("Error reading content {post_id}: {err:?}"))
 	}
@@ -250,6 +234,7 @@ impl ClientExt for Client {
 			parsed_url
 				.path_segments()
 				.and_then(|segments| segments.last())
+				.and_then(|name| if name.is_empty() { None } else { Some(name) })
 		})
 		.ok_or("Filename unknown")?;
 
@@ -263,9 +248,14 @@ impl ClientExt for Client {
 			let mut f = File::create(&temp_path)?;
 
 			self.fetch(&url)
-				.and_then(|response| response.bytes().map_err(|err| err.into())).await
-				.and_then(|bytes| std::io::copy(&mut Cursor::new(bytes), &mut f).map_err(|err| err.into()))
-				.inspect(|byte_count| info!("Wrote {} bytes to {:?}", byte_count, full_path))
+				.and_then(|response| async move {
+					let mut stream = response.bytes_stream();
+					while let Some(item) = stream.next().await {
+						let chunk = item.or(Err(format!("Error while downloading file")))?;
+						f.write_all(&chunk).or(Err("Error writing file".to_string()))?;
+					}
+					Ok(())
+				}).await
 				.inspect_err(|err| error!("Error writing file: {err:?}"))
 				.and_then(|_| fs::rename(&temp_path, &full_path).map_err(|err| err.into()))
 				.inspect_err(|err| error!("Error renaming file: {err:?}"))?;
