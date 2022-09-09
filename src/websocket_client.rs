@@ -113,7 +113,7 @@ impl WebSocketClient {
 		let msg = reader
 			.next()
 			.await
-			.ok_or::<Error>("Message queue exhausted".into())
+			.ok_or_else(|| <&str as Into<Error>>::into("Message queue exhausted"))
 			.and_then(|m| m.map_err(|err| err.into()))?;
 
 		msg.to_text()

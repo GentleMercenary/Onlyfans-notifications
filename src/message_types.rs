@@ -165,7 +165,7 @@ impl ContentType for StoryContent {
 	}
 }
 
-fn get_thumbnail<T: ViewableMedia>(media: &Vec<T>) -> Option<&str> {
+fn get_thumbnail<T: ViewableMedia>(media: &[T]) -> Option<&str> {
 	media
 		.iter()
 		.find_map(|media| media.get().thumbnail.as_deref().filter(|s| s != &""))
@@ -216,7 +216,7 @@ async fn handle_content<T: ContentType>(
 
 	if let Some(thumb) = get_thumbnail(content.get_media()) {
 		let thumb = client
-			.fetch_file(&thumb, TEMPDIR.wait().path(), None)
+			.fetch_file(thumb, TEMPDIR.wait().path(), None)
 			.await?;
 		toast.image(2, Image::new_local(thumb)?);
 	}
@@ -406,12 +406,12 @@ pub enum MessageType {
 	Error(ErrorMessage),
 }
 
-async fn download_media<T: ViewableMedia>(client: &Client, media: &Vec<T>, path: &Path) {
+async fn download_media<T: ViewableMedia>(client: &Client, media: &[T], path: &Path) {
 	join_all(media.iter().filter_map(|media| {
 		media.get().source.as_ref().map(|url| async move {
 			client
 				.fetch_file(
-					&url,
+					url,
 					&path.join(match media.media_type() {
 						MediaTypes::Photo => "Images",
 						MediaTypes::Audio => "Audios",
@@ -488,11 +488,11 @@ pub trait Message {
 		let settings = SETTINGS.wait();
 
 		let username = &user.username;
-		let notify = handle_content(content, &client, &user);
+		let notify = handle_content(content, client, user);
 		let path = Path::new("data")
 			.join(&username)
 			.join(PostContent::get_type());
-		let download = download_media(&client, &content.get_media(), &path);
+		let download = download_media(client, content.get_media(), &path);
 
 		if settings.should_download(username) {
 			if settings.should_notify(username) {
