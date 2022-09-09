@@ -149,13 +149,10 @@ impl ClientExt for Client {
 		let query = parsed_url.query();
 
 		let mut auth_id = "0";
-		match query {
-			Some(q) => {
-				auth_id = &auth_params.cookie.auth_id;
-				path = format!("{}?{}", path, q);
-				headers.insert("user-id", header::HeaderValue::from_str(auth_id)?);
-			}
-			None => (),
+		if let Some(q) = query {
+			auth_id = &auth_params.cookie.auth_id;
+			path = format!("{}?{}", path, q);
+			headers.insert("user-id", header::HeaderValue::from_str(auth_id)?);
 		}
 
 		let time = SystemTime::now()
@@ -252,12 +249,12 @@ impl ClientExt for Client {
 			let temp_path = path.join(filename.to_owned() + ".part");
 			let mut f = File::create(&temp_path)?;
 
-			self.fetch(&url)
+			self.fetch(url)
 				.and_then(|response| async move {
 					let mut stream = response.bytes_stream();
 					while let Some(item) = stream.next().await {
-						let chunk = item.or(Err("Error while downloading file".to_string()))?;
-						f.write_all(&chunk).or(Err("Error writing file".to_string()))?;
+						let chunk = item.map_err(|_| "Error while downloading file".to_string())?;
+						f.write_all(&chunk).map_err(|_| "Error writing file".to_string())?;
 					}
 					Ok(())
 				})

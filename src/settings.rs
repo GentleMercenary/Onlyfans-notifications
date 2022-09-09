@@ -16,14 +16,14 @@ pub enum Whitelist {
 impl Settings {
 	pub fn should_notify(&self, username: &str) -> bool {
 		match &self.notify {
-			Whitelist::Select(whitelist) => whitelist.iter().find(|&s| s == username).is_some(),
+			Whitelist::Select(whitelist) => whitelist.iter().any(|s| s == username),
 			Whitelist::Full(b) => *b,
 		}
 	}
 
 	pub fn should_download(&self, username: &str) -> bool {
 		match &self.download {
-			Whitelist::Select(whitelist) => whitelist.iter().find(|&s| s == username).is_some(),
+			Whitelist::Select(whitelist) => whitelist.iter().any(|s| s == username),
 			Whitelist::Full(b) => *b,
 		}
 	}

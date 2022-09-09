@@ -6,7 +6,6 @@ mod deserializers;
 mod message_types;
 mod websocket_client;
 use client::ClientExt;
-use message_types::Error;
 mod settings;
 
 #[macro_use]
@@ -26,14 +25,14 @@ use std::{
 	sync::Arc,
 };
 use tempdir::TempDir;
-use tokio::{select, task};
+use tokio::select;
 use tokio_util::sync::CancellationToken;
 use trayicon::{Icon, MenuBuilder, TrayIconBuilder};
 use winit::{
 	event::Event,
 	event_loop::{ControlFlow, EventLoop, EventLoopProxy},
 };
-use winrt_toast::{register, Toast, ToastManager};
+use winrt_toast::{register, Toast, ToastManager, ToastDuration};
 
 static MANAGER: OnceCell<ToastManager> = OnceCell::new();
 static SETTINGS: OnceCell<Settings> = OnceCell::new();
@@ -53,60 +52,56 @@ fn register_app() -> Result<(), Box<dyn error::Error>> {
 	Ok(())
 }
 
-fn spawn_connection_thread(proxy: EventLoopProxy<Events>, cancel_token: Arc<CancellationToken>) {
-	info!("Spawning websocket thread");
-	let cloned_proxy = proxy.clone();
-	task::spawn(async move {
-		fn on_error(err: Error) {
-			error!("Termination caused by: {:?}", err);
+async fn make_connection(proxy: EventLoopProxy<Events>, cancel_token: Arc<CancellationToken>) {
+	let auth_link: &str = "https://onlyfans.com/api2/v2/users/me";
+	info!("Fetching authentication parameters");
 
+	let cloned_proxy = proxy.clone();
+	Client::with_auth()
+		.and_then(|client| async move { client.fetch(auth_link).await })
+		.and_then(|response| response.text().map_err(|err| err.into()))
+		.and_then(|response| async move {
+			info!("Successful fetch for authentication parameters");
+
+			let init_msg: message_types::InitMessage = serde_json::from_str(&response)?;
+			debug!("{:?}", init_msg);
+			let mut socket = websocket_client::WebSocketClient::new()?;
+
+			let res = socket
+				.connect(init_msg.ws_auth_token)
+				.and_then(|socket| async move {
+					cloned_proxy.send_event(Events::Connected)?;
+
+					loop {
+						select! {
+							_ = cancel_token.cancelled() => break,
+							res = socket.message_loop() => return res
+						}
+					}
+
+					Ok(())
+				})
+				.await;
+
+			info!("Terminating websocket");
+			socket.close().await?;
+			res
+		})
+		.unwrap_or_else(|errpr| {
+			error!("Termination caused by: {:?}", errpr);
+	
 			let mut toast = Toast::new();
 			toast
 				.text1("OF Notifier")
-				.text2("An error occurred, disconnecting");
-
+				.text2("An error occurred, disconnecting")
+				.duration(ToastDuration::Long);
+	
 			MANAGER.wait().show(&toast).unwrap();
-		}
+		})
+		.await;
 
-		let auth_link: &str = "https://onlyfans.com/api2/v2/users/me";
-		info!("Fetching authentication parameters");
-
-		Client::with_auth()
-			.and_then(|client| async move { client.fetch(auth_link).await })
-			.and_then(|response| response.text().map_err(|err| err.into()))
-			.and_then(|response| async move {
-				info!("Successful fetch for authentication parameters");
-
-				let init_msg: message_types::InitMessage = serde_json::from_str(&response)?;
-				debug!("{:?}", init_msg);
-				let mut socket = websocket_client::WebSocketClient::new()?;
-
-				let res = socket
-					.connect(init_msg.ws_auth_token)
-					.and_then(|socket| async move {
-						cloned_proxy.send_event(Events::Connected)?;
-
-						loop {
-							select! {
-								_ = cancel_token.cancelled() => break,
-								res = socket.message_loop() => return res
-							}
-						}
-
-						Ok(())
-					})
-					.await;
-
-				info!("Terminating websocket");
-				socket.close().await?;
-				return res;
-			})
-			.unwrap_or_else(on_error)
-			.await;
-
-		info!("Killing websocket thread");
-		proxy.send_event(Events::Disconnected).unwrap()
-	});
+	info!("Killing websocket thread");
+	proxy.send_event(Events::Disconnected).unwrap()
 }
 
 #[derive(PartialEq, Eq)]
@@ -162,13 +157,13 @@ async fn main() -> Result<(), Box<dyn error::Error>> {
 	let mut state = State::Connecting;
 	let mut cancel_token = Arc::new(CancellationToken::new());
 
-	spawn_connection_thread(proxy.clone(), cancel_token.clone());
+	tokio::spawn(make_connection(proxy.clone(), cancel_token.clone()));
 	event_loop.run(move |event, _, control_flow| {
 		*control_flow = ControlFlow::Wait;
 		let _ = tray_icon;
 
-		match event {
-			Event::UserEvent(e) => match e {
+		if let Event::UserEvent(e) = event {
+			match e {
 				Events::ClickTrayIcon => {
 					info!("Tray icon clicked");
 					if state == State::Connected {
@@ -178,7 +173,7 @@ async fn main() -> Result<(), Box<dyn error::Error>> {
 						cancel_token = Arc::new(CancellationToken::new());
 						info!("Connecting");
 						state = State::Connecting;
-						spawn_connection_thread(proxy.clone(), cancel_token.clone());
+						tokio::spawn(make_connection(proxy.clone(), cancel_token.clone()));
 					}
 				}
 				Events::Connected => {
@@ -197,8 +192,7 @@ async fn main() -> Result<(), Box<dyn error::Error>> {
 					MANAGER.wait().clear().unwrap();
 					*control_flow = ControlFlow::Exit;
 				}
-			},
-			_ => (),
+			}
 		}
 	});
 }
@@ -255,7 +249,7 @@ mod tests {
 			}
 		}"#;
 
-		let msg = serde_json::from_str::<message_types::MessageType>(&incoming).unwrap();
+		let msg = serde_json::from_str::<message_types::MessageType>(incoming).unwrap();
 		assert!(matches!(
 			msg,
 			message_types::MessageType::Tagged(message_types::TaggedMessageType::Api2ChatMessage(
@@ -293,7 +287,7 @@ mod tests {
 			}
 		}"#;
 
-		let msg = serde_json::from_str::<message_types::MessageType>(&incoming).unwrap();
+		let msg = serde_json::from_str::<message_types::MessageType>(incoming).unwrap();
 		assert!(matches!(
 			msg,
 			message_types::MessageType::Tagged(message_types::TaggedMessageType::PostPublished(_))
@@ -344,7 +338,7 @@ mod tests {
 			]
 		}"#;
 
-		let msg = serde_json::from_str::<message_types::MessageType>(&incoming).unwrap();
+		let msg = serde_json::from_str::<message_types::MessageType>(incoming).unwrap();
 		assert!(matches!(
 			msg,
 			message_types::MessageType::Tagged(message_types::TaggedMessageType::Stories(_))
