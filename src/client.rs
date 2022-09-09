@@ -256,14 +256,13 @@ impl ClientExt for Client {
 				.and_then(|response| async move {
 					let mut stream = response.bytes_stream();
 					while let Some(item) = stream.next().await {
-						let chunk = item.or(Err(format!("Error while downloading file")))?;
-						f.write_all(&chunk)
-							.or(Err("Error writing file".to_string()))?;
+						let chunk = item.or(Err("Error while downloading file".to_string()))?;
+						f.write_all(&chunk).or(Err("Error writing file".to_string()))?;
 					}
 					Ok(())
 				})
 				.await
-				.inspect_err(|err| error!("Error writing file: {err:?}"))
+				.inspect_err(|err| error!("{err:?}"))
 				.and_then(|_| fs::rename(&temp_path, &full_path).map_err(|err| err.into()))
 				.inspect_err(|err| error!("Error renaming file: {err:?}"))?;
 		}

@@ -234,6 +234,7 @@ mod tests {
 
 		let incoming = r#"{
 			"api2_chat_message": {
+				"id": 0,
 				"text": "This is a message<br />\n to test <a href = \"/onlyfans\">MARKDOWN parsing</a> 👌<br />\n in notifications 💯",
 				"price": 3.99,
 				"fromUser": {
@@ -312,7 +313,7 @@ mod tests {
 			.unwrap();
 
 		TermLogger::init(
-			LevelFilter::Info,
+			LevelFilter::Debug,
 			Config::default(),
 			TerminalMode::Mixed,
 			ColorChoice::Auto,
