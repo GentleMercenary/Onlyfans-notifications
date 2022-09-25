@@ -2,13 +2,10 @@
 A tray application for Windows that gives you push notifications and instant downloads of new posts, messages and stories posted by models you subscribe to on Onlyfans.
 
 ## Setup
-1. Clone this repository
-2. [Install cargo/rustup](https://www.rust-lang.org/tools/install)
-3. [Switch to the nightly toolchain](https://rust-lang.github.io/rustup/concepts/channels.html)
-4. Fill out authentication header data in auth.json
-5. run cargo build --release
-
-The executable can be found in `target/release/`, but it expects auth.json to be in the same directory. You can move auth.json to this directory or create a shortcut to the executable that starts in the root directory of this repo.
+1. Download the [latest release](https://github.com/GentleMercenary/Onlyfans-notifications/releases/latest)
+2. Fill out authentication header data in auth.json
+3. (Optional) Edit settings.json to your liking 
+4. Run the executable
 
 Files are downloaded to `data/{model_name}/{origin}/{content_type}/{filename}` where <br>
 `origin = "Messages" | "Posts" | "Stories"`<br>
