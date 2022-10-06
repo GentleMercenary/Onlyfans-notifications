@@ -53,7 +53,7 @@ impl WebSocketClient {
 
 			tokio::select! {
 				msg = self.wait_for_message() => {
-					if let Ok(msg) = msg {
+					if let Some(msg) = msg? {
 						match msg {
 							message_types::MessageType::Connected(_) => {
 								if msg.handle_message().await.is_ok() {
@@ -86,7 +86,7 @@ impl WebSocketClient {
 		loop {
 			tokio::select! {
 				msg = self.wait_for_message() => {
-					if let Ok(msg) = msg {
+					if let Some(msg) = msg? {
 						let _ = msg.handle_message().await;
 					}
 					msg_received = true;
@@ -98,7 +98,6 @@ impl WebSocketClient {
 					}
 
 					let writer = self.socket.as_mut().ok_or("")?;
-					debug!("Sending heartbeat");
 					writer.send(self.heartbeat.clone()).await?;
 					msg_received = false;
 				}
@@ -108,7 +107,7 @@ impl WebSocketClient {
 		Err("Message loop interruped unexpectedly".into())
 	}
 
-	async fn wait_for_message(&mut self) -> Result<message_types::MessageType, Error> {
+	async fn wait_for_message(&mut self) -> Result<Option<message_types::MessageType>, Error> {
 		let reader = self.socket.as_mut().unwrap();
 		let msg = reader
 			.next()
@@ -118,9 +117,11 @@ impl WebSocketClient {
 
 		msg.to_text()
 			.map_err(|err| err.into())
-			.inspect(|s| debug!("Received message: {s}"))
-			.and_then(|s| {
-				serde_json::from_str::<message_types::MessageType>(s).map_err(|err| err.into())
+			.inspect(|s| {
+				if *s != "{\"online\":[]}" {
+					debug!("Received message: {s}")
+				}
 			})
+			.map(|s| serde_json::from_str::<message_types::MessageType>(s).ok())
 	}
 }

@@ -11,7 +11,7 @@ use filetime::{set_file_mtime, FileTime};
 use futures::future::{join, join_all, try_join};
 use reqwest::{Client, Url};
 use serde::{Deserialize, Serialize};
-use std::{error, path::Path, process::Command};
+use std::{error, path::Path};
 use winrt_toast::{
 	content::{
 		image::{ImageHintCrop, ImagePlacement},
@@ -221,22 +221,7 @@ async fn handle_content<T: ContentType>(
 		toast.image(2, Image::new_local(thumb)?);
 	}
 
-	MANAGER
-		.wait()
-		.show_with_callbacks(
-			&toast,
-			Some(Box::new(move |rs| {
-				if let Ok(s) = rs {
-					Command::new("explorer").arg(s).spawn().unwrap();
-				}
-			})),
-			None,
-			Some(Box::new(move |e| {
-				error!("Could't show notification: {:?}", e);
-			})),
-		)
-		.inspect_err(|err| error!("Error showing notification: {err}"))
-		.map_err(|err| err.into())
+	MANAGER.wait().show(&toast).map_err(|err| err.into())
 }
 
 #[derive(Deserialize, Debug)]
@@ -421,10 +406,9 @@ async fn download_media<T: ViewableMedia>(client: &Client, media: &[T], path: &P
 				)
 				.await
 				.inspect_err(|err| error!("Download failed: {err}"))
-				.and_then(|path| {
-					set_file_mtime(path, FileTime::from_unix_time(media.unix_time(), 0))
-						.inspect_err(|err| error!("Error setting file modify time: {err}"))
-						.map_err(|err| err.into())
+				.inspect(|path| {
+					let _ = set_file_mtime(path, FileTime::from_unix_time(media.unix_time(), 0))
+						.inspect_err(|err| warn!("Error setting file modify time: {err}"));
 				})
 		})
 	}))

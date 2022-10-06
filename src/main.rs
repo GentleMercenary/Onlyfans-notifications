@@ -89,18 +89,17 @@ async fn make_connection(proxy: EventLoopProxy<Events>, cancel_token: Arc<Cancel
 		})
 		.unwrap_or_else(|errpr| {
 			error!("Termination caused by: {:?}", errpr);
-	
+
 			let mut toast = Toast::new();
 			toast
 				.text1("OF Notifier")
 				.text2("An error occurred, disconnecting")
 				.duration(ToastDuration::Long);
-	
+
 			MANAGER.wait().show(&toast).unwrap();
 		})
 		.await;
 
-	info!("Killing websocket thread");
 	proxy.send_event(Events::Disconnected).unwrap()
 }
 
@@ -121,22 +120,27 @@ enum Events {
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn error::Error>> {
-	register_app()?;
-
-	let s = fs::read_to_string("settings.json")?;
-	SETTINGS
-		.set(serde_json::from_str::<Settings>(&s)?)
-		.expect("Settings read properly");
-
-	fs::create_dir_all(&Path::new("logs"))?;
+	fs::create_dir_all(&Path::new("logs")).expect("Created log directory");
 	let mut log_path = Path::new("logs").join(Local::now().format("%Y%m%d_%H%M%S").to_string());
 	log_path.set_extension("log");
 
 	WriteLogger::init(
 		LevelFilter::Info,
 		Config::default(),
-		File::create(log_path)?,
+		File::create(log_path).expect("Created log file"),
 	)?;
+
+	register_app().inspect_err(|err| error!("Error registering app: {}", err))?;
+
+	let s = fs::read_to_string("settings.json")
+		.inspect_err(|err| error!("Error reading settings.json: {}", err))?;
+
+	SETTINGS
+		.set(
+			serde_json::from_str::<Settings>(&s)
+				.inspect_err(|err| error!("Error parsing settings: {}", err))?,
+		)
+		.expect("Settings read properly");
 
 	let event_loop = EventLoop::<Events>::with_user_event();
 	let proxy = event_loop.create_proxy();
