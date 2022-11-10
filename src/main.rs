@@ -19,7 +19,6 @@ use reqwest::Client;
 use settings::Settings;
 use simplelog::{Config, LevelFilter, WriteLogger};
 use std::{
-	error,
 	fs::{self, File},
 	path::Path,
 	sync::Arc,
@@ -38,7 +37,7 @@ static MANAGER: OnceCell<ToastManager> = OnceCell::new();
 static SETTINGS: OnceCell<Settings> = OnceCell::new();
 static TEMPDIR: OnceCell<TempDir> = OnceCell::new();
 
-fn register_app() -> Result<(), Box<dyn error::Error>> {
+fn register_app() -> anyhow::Result<()> {
 	let aum_id = "OFNotifier";
 	let icon_path = Path::new("res").join("icon.ico").canonicalize()?; // Doesn't work for some reason
 	register(aum_id, "OF noitifier", Some(icon_path.as_path()))?;
@@ -119,7 +118,7 @@ enum Events {
 }
 
 #[tokio::main]
-async fn main() -> Result<(), Box<dyn error::Error>> {
+async fn main() -> anyhow::Result<()> {
 	fs::create_dir_all(&Path::new("logs")).expect("Created log directory");
 	let mut log_path = Path::new("logs").join(Local::now().format("%Y%m%d_%H%M%S").to_string());
 	log_path.set_extension("log");

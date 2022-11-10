@@ -1,5 +1,6 @@
-use super::message_types::{self, Error, Handleable};
+use super::message_types::{self, Handleable};
 
+use anyhow::{anyhow, bail};
 use futures_util::{SinkExt, StreamExt};
 use std::time::Duration;
 use tokio::{net::TcpStream, time::sleep};
@@ -11,7 +12,7 @@ pub struct WebSocketClient {
 }
 
 impl WebSocketClient {
-	pub fn new() -> Result<Self, Error> {
+	pub fn new() -> anyhow::Result<Self> {
 		Ok(Self {
 			socket: None,
 			heartbeat: Message::Text(serde_json::to_string(&message_types::GetOnlinesMessage {
@@ -28,7 +29,7 @@ impl WebSocketClient {
 		Ok(())
 	}
 
-	pub async fn connect(&mut self, token: &str) -> Result<&mut Self, Error> {
+	pub async fn connect(&mut self, token: &str) -> anyhow::Result<&mut Self> {
 		info!("Creating websocket");
 		let (ws, _) = connect_async("wss://ws2.onlyfans.com/ws2/").await?;
 		info!("Websocket created");
@@ -74,11 +75,11 @@ impl WebSocketClient {
 		if success {
 			Ok(self)
 		} else {
-			Err("Couldn't connect to websocket".into())
+			bail!("Couldn't connect to websocket")
 		}
 	}
 
-	pub async fn message_loop(&mut self) -> Result<(), Error> {
+	pub async fn message_loop(&mut self) -> anyhow::Result<()> {
 		info!("Starting websocket message loop");
 		let mut interval = tokio::time::interval(Duration::from_secs(20));
 		let mut msg_received = true;
@@ -97,23 +98,23 @@ impl WebSocketClient {
 						break;
 					}
 
-					let writer = self.socket.as_mut().ok_or("")?;
+					let writer = self.socket.as_mut().ok_or_else(|| anyhow!(""))?;
 					writer.send(self.heartbeat.clone()).await?;
 					msg_received = false;
 				}
 			}
 		}
 
-		Err("Message loop interruped unexpectedly".into())
+		Err(anyhow!("Message loop interruped unexpectedly"))
 	}
 
-	async fn wait_for_message(&mut self) -> Result<Option<message_types::MessageType>, Error> {
+	async fn wait_for_message(&mut self) -> anyhow::Result<Option<message_types::MessageType>> {
 		let reader = self.socket.as_mut().unwrap();
 		let msg = reader
 			.next()
 			.await
-			.ok_or_else(|| <&str as Into<Error>>::into("Message queue exhausted"))
-			.and_then(|m| m.map_err(|err| err.into()))?;
+			.ok_or_else(|| anyhow!("Message queue exhausted"))
+			??;
 
 		msg.to_text()
 			.map_err(|err| err.into())

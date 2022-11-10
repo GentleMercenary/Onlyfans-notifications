@@ -2,6 +2,7 @@
 
 use crate::{MANAGER, SETTINGS, TEMPDIR};
 
+use anyhow::{anyhow, bail};
 use super::client::ClientExt;
 use super::deserializers::*;
 
@@ -11,7 +12,7 @@ use filetime::{set_file_mtime, FileTime};
 use futures::future::{join, join_all, try_join};
 use reqwest::{Client, Url};
 use serde::{Deserialize, Serialize};
-use std::{error, path::Path};
+use std::path::Path;
 use winrt_toast::{
 	content::{
 		image::{ImageHintCrop, ImagePlacement},
@@ -19,8 +20,6 @@ use winrt_toast::{
 	},
 	Header, Image, Text, Toast,
 };
-
-pub type Error = Box<dyn error::Error + Send + Sync>;
 
 #[derive(Serialize, Debug)]
 pub struct ConnectMessage<'a> {
@@ -175,7 +174,7 @@ async fn handle_content<T: ContentType>(
 	content: &T,
 	client: &Client,
 	user: &User,
-) -> Result<(), Error> {
+) -> anyhow::Result<()> {
 	let parsed = user.avatar.parse::<Url>()?;
 	let filename = parsed
 		.path_segments()
@@ -186,7 +185,7 @@ async fn handle_content<T: ContentType>(
 
 			Option::zip(filename, ext).map(|(filename, ext)| [filename, ext].join("."))
 		})
-		.ok_or("Filename unknown")?;
+		.ok_or_else(|| anyhow!("Filename unknown"))?;
 
 	let mut user_path = Path::new("data").join(&user.username);
 	std::fs::create_dir_all(&user_path)?;
@@ -221,7 +220,8 @@ async fn handle_content<T: ContentType>(
 		toast.image(2, Image::new_local(thumb)?);
 	}
 
-	MANAGER.wait().show(&toast).map_err(|err| err.into())
+	MANAGER.wait().show(&toast)?;
+	Ok(())
 }
 
 #[derive(Deserialize, Debug)]
@@ -417,12 +417,12 @@ async fn download_media<T: ViewableMedia>(client: &Client, media: &[T], path: &P
 
 #[async_trait]
 pub trait Handleable {
-	async fn handle_message(self) -> Result<(), Error>;
+	async fn handle_message(self) -> anyhow::Result<()>;
 }
 
 #[async_trait]
 impl Handleable for MessageType {
-	async fn handle_message(self) -> Result<(), Error> {
+	async fn handle_message(self) -> anyhow::Result<()> {
 		return match self {
 			Self::Connected(_) => {
 				info!("Connect message received");
@@ -435,7 +435,7 @@ impl Handleable for MessageType {
 			}
 			Self::Error(msg) => {
 				error!("Error message received: {:?}", msg);
-				Err(format!("websocket received error message with code {}", msg.error).into())
+				bail!("websocket received error message with code {}", msg.error)
 			}
 			Self::Tagged(tagged) => tagged.handle_message().await,
 		};
@@ -444,7 +444,7 @@ impl Handleable for MessageType {
 
 #[async_trait]
 impl Handleable for TaggedMessageType {
-	async fn handle_message(self) -> Result<(), Error> {
+	async fn handle_message(self) -> anyhow::Result<()> {
 		let client = Client::with_auth().await?;
 
 		match self {
@@ -463,12 +463,12 @@ impl Handleable for TaggedMessageType {
 
 #[async_trait]
 pub trait Message {
-	async fn handle(&self, client: &Client) -> Result<(), Error>;
+	async fn handle(&self, client: &Client) -> anyhow::Result<()>;
 	async fn shared<T: ContentType + Send + Sync>(
 		user: &User,
 		content: &T,
 		client: &Client,
-	) -> Result<(), Error> {
+	) -> anyhow::Result<()> {
 		let settings = SETTINGS.wait();
 
 		let username = &user.username;
@@ -494,7 +494,7 @@ pub trait Message {
 
 #[async_trait]
 impl Message for PostPublishedMessage {
-	async fn handle(&self, client: &Client) -> Result<(), Error> {
+	async fn handle(&self, client: &Client) -> anyhow::Result<()> {
 		info!("Post message received: {:?}", self);
 
 		let (user, content) = try_join(
@@ -509,7 +509,7 @@ impl Message for PostPublishedMessage {
 
 #[async_trait]
 impl Message for ChatMessage {
-	async fn handle(&self, client: &Client) -> Result<(), Error> {
+	async fn handle(&self, client: &Client) -> anyhow::Result<()> {
 		info!("Chat message received: {:?}", self);
 		Self::shared(&self.from_user, &self.content, client).await
 	}
@@ -517,7 +517,7 @@ impl Message for ChatMessage {
 
 #[async_trait]
 impl Message for StoryMessage {
-	async fn handle(&self, client: &Client) -> Result<(), Error> {
+	async fn handle(&self, client: &Client) -> anyhow::Result<()> {
 		info!("Story message received: {:?}", self);
 
 		let user = client.fetch_user(&self.user_id.to_string()).await?;
