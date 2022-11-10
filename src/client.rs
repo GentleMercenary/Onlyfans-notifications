@@ -68,7 +68,7 @@ struct AuthParams {
 #[once(time = 10, result = true, sync_writes = true)]
 async fn get_params() -> anyhow::Result<(StaticParams, AuthParams)> {
 	Ok((
-		reqwest::get("https://raw.githubusercontent.com/DATAHOARDERS/dynamic-rules/main/onlyfans.json")
+		reqwest::get("https://raw.githubusercontent.com/DIGITALCRIMINALS/dynamic-rules/main/onlyfans.json")
 			.inspect_err(|err| error!("Error getting dynamic rules: {err:?}"))
 			.and_then(|response| response.json::<StaticParams>())
 			.await
