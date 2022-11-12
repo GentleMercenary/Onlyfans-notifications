@@ -216,7 +216,7 @@ impl ClientExt for Client {
 
 	async fn fetch_content(&self, post_id: &str) -> anyhow::Result<PostContent> {
 		self.fetch(&format!(
-			"https://onlyfans.com/api2/v2/posts/{}?skip_users=all",
+			"https://onlyfans.com/api2/v2/posts/{}",
 			post_id
 		))
 		.and_then(|response| response.json::<PostContent>().map_err(|err| err.into()))

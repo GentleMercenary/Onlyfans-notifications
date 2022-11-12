@@ -86,8 +86,8 @@ async fn make_connection(proxy: EventLoopProxy<Events>, cancel_token: Arc<Cancel
 			socket.close().await?;
 			res
 		})
-		.unwrap_or_else(|errpr| {
-			error!("Termination caused by: {:?}", errpr);
+		.unwrap_or_else(|err| {
+			error!("Termination caused by: {:?}", err);
 
 			let mut toast = Toast::new();
 			toast
@@ -345,6 +345,100 @@ mod tests {
 		assert!(matches!(
 			msg,
 			message_types::MessageType::Tagged(message_types::TaggedMessageType::Stories(_))
+		));
+		msg.handle_message().await.unwrap();
+		sleep(Duration::from_millis(5000));
+	}
+
+	
+	#[tokio::test]
+	async fn test_notification_message() {
+		register_app().unwrap();
+		SETTINGS
+			.set(Settings {
+				notify: Whitelist::Full(true),
+				download: Whitelist::Full(false),
+			})
+			.unwrap();
+
+		TermLogger::init(
+			LevelFilter::Debug,
+			Config::default(),
+			TerminalMode::Mixed,
+			ColorChoice::Auto,
+		)
+		.unwrap();
+
+		let incoming = r#"{
+			"new_message":{
+			   "id":"0",
+			   "type":"message",
+			   "text":"is currently running a promotion, <a href=\"https://onlyfans.com/onlyfans\">check it out</a>",
+			   "subType":"promoreg_for_expired",
+			   "user_id":"274000171",
+			   "isRead":false,
+			   "canGoToProfile":true,
+			   "newPrice":null,
+			   "user":{
+					"avatar": "https://public.onlyfans.com/files/m/mk/mka/mkamcrf6rjmcwo0jj4zoavhmalzohe5a1640180203/avatar.jpg",
+					"id": 15585607,
+					"name": "OnlyFans",
+					"username": "onlyfans"
+				}
+			},
+			"hasSystemNotifications": false
+		 }"#;
+
+		let msg = serde_json::from_str::<message_types::MessageType>(incoming).unwrap();
+		assert!(matches!(
+			msg,
+			message_types::MessageType::NewMessage(_)
+		));
+		msg.handle_message().await.unwrap();
+		sleep(Duration::from_millis(5000));
+	}
+
+	#[tokio::test]
+	async fn test_stream_message() {
+		register_app().unwrap();
+		SETTINGS
+			.set(Settings {
+				notify: Whitelist::Full(true),
+				download: Whitelist::Full(true),
+			})
+			.unwrap();
+
+		TermLogger::init(
+			LevelFilter::Debug,
+			Config::default(),
+			TerminalMode::Mixed,
+			ColorChoice::Auto,
+		)
+		.unwrap();
+
+		let incoming = r#"{
+			"stream": {
+				"id": 2611175,
+				"description": "stream description",
+				"title": "stream title",
+				"startedAt": "2022-11-05T14:02:24+00:00",
+				"room": "dc2-room-7dYNFuya8oYBRs1",
+				"thumbUrl": "https://stream1-dc2.onlyfans.com/img/dc2-room-7dYNFuya8oYBRs1/thumb.jpg",
+				"user": {
+					"avatar": "https://public.onlyfans.com/files/m/mk/mka/mkamcrf6rjmcwo0jj4zoavhmalzohe5a1640180203/avatar.jpg",
+					"id": 15585607,
+					"name": "OnlyFans",
+					"username": "onlyfans"
+				}
+			}
+		}"#;
+
+		let msg = serde_json::from_str::<message_types::MessageType>(incoming).unwrap();
+		assert!(matches!(
+			msg,
+			message_types::MessageType::Tagged(message_types::TaggedMessageType::Stream(
+				_
+			))
 		));
 		msg.handle_message().await.unwrap();
 		sleep(Duration::from_millis(5000));

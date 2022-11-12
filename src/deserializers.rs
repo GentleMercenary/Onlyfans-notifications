@@ -5,6 +5,8 @@ use serde::de::Error;
 use serde::{Deserialize, Deserializer};
 use strip_markdown::*;
 
+use crate::message_types::NotificationMessage;
+
 use super::client::Cookie;
 
 pub fn str_to_date<'de, D>(deserializer: D) -> Result<DateTime<Utc>, D::Error>
@@ -32,20 +34,19 @@ where
 	let mut cookie_map: HashMap<&str, &str> = HashMap::new();
 	let filtered_str = s.replace(';', "");
 	for c in filtered_str.split(' ') {
-		let (k, v) = c.split_once('=').expect("Key/Value cookie pair found");
+		let (k, v) = c.split_once('=')
+			.ok_or_else(|| D::Error::custom("No Key/Value cookie pair found"))?;
 		cookie_map.insert(k, v);
 	}
 
 	Ok(Cookie {
 		auth_id: cookie_map
 			.get("auth_id")
-			.ok_or("'auth_id' missing from cookie auth parameter")
-			.map_err(D::Error::custom)?
+			.ok_or_else(|| D::Error::custom("'auth_id' missing from cookie auth parameter"))?
 			.to_string(),
 		sess: cookie_map
 			.get("sess")
-			.ok_or("'sess' missing from cookie auth parameter")
-			.map_err(D::Error::custom)?
+			.ok_or_else(|| D::Error::custom("'sess' missing from cookie auth parameter"))?
 			.to_string(),
 		auth_hash: cookie_map.get("auth_hash").unwrap_or(&"").to_string(),
 	})
@@ -58,13 +59,25 @@ where
 	let s: &str = Deserialize::deserialize(deserializer)?;
 	(!s.is_empty())
 		.then_some(s)
-		.ok_or("Empty string")
-		.map_err(D::Error::custom)
+		.ok_or_else(|| D::Error::custom("Empty string"))
 }
 
 pub fn non_empty_string<'de, D>(deserializer: D) -> Result<String, D::Error>
 where
 	D: Deserializer<'de>,
 {
-	non_empty_str(deserializer).map(|s| s.to_owned())
+	non_empty_str(deserializer).map(str::to_owned)
+}
+
+pub fn notitication_message<'de, D>(deserializer: D) -> Result<NotificationMessage, D::Error>
+where 
+	D: Deserializer<'de>
+{
+	#[derive(Deserialize)]
+	struct Outer {
+		new_message: NotificationMessage
+	}
+
+	Outer::deserialize(deserializer)
+		.map(|outer| outer.new_message)
 }

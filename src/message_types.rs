@@ -9,10 +9,10 @@ use super::deserializers::*;
 use async_trait::async_trait;
 use chrono::{DateTime, Utc};
 use filetime::{set_file_mtime, FileTime};
-use futures::future::{join, join_all, try_join};
+use futures::future::{join, join_all};
 use reqwest::{Client, Url};
 use serde::{Deserialize, Serialize};
-use std::path::Path;
+use std::{path::Path, slice};
 use winrt_toast::{
 	content::{
 		image::{ImageHintCrop, ImagePlacement},
@@ -65,7 +65,7 @@ pub trait ContentType {
 	type Media: ViewableMedia + Sync + Send;
 
 	fn get_type() -> &'static str;
-	fn get_media(&self) -> &Vec<Self::Media>;
+	fn get_media(&self) -> Option<&[Self::Media]>;
 	fn to_toast(&self) -> Toast;
 }
 
@@ -75,6 +75,7 @@ pub struct PostContent {
 	#[serde(deserialize_with = "de_markdown_string")]
 	text: String,
 	price: Option<f32>,
+	author: User,
 	#[serde(flatten)]
 	shared: Content<PostMedia>,
 }
@@ -100,8 +101,8 @@ impl ContentType for PostContent {
 		toast
 	}
 
-	fn get_media(&self) -> &Vec<Self::Media> {
-		&self.shared.media
+	fn get_media(&self) -> Option<&[Self::Media]> {
+		Some(&self.shared.media)
 	}
 }
 
@@ -136,8 +137,8 @@ impl ContentType for MessageContent {
 		toast
 	}
 
-	fn get_media(&self) -> &Vec<Self::Media> {
-		&self.shared.media
+	fn get_media(&self) -> Option<&[Self::Media]> {
+		Some(&self.shared.media)
 	}
 }
 
@@ -159,15 +160,88 @@ impl ContentType for StoryContent {
 		Toast::new()
 	}
 
-	fn get_media(&self) -> &Vec<Self::Media> {
-		&self.shared.media
+	fn get_media(&self) -> Option<&[Self::Media]> {
+		Some(&self.shared.media)
+	}
+}
+
+#[derive(Deserialize, Debug)]
+#[serde(rename_all = "camelCase")]
+pub struct NotificationContent {
+	id: String,
+	#[serde(deserialize_with = "de_markdown_string")]
+	text: String,
+}
+
+impl ContentType for NotificationContent {
+	type Media = PostMedia;
+
+fn get_type() -> &'static str {
+        "Notification"
+    }
+
+fn get_media(&self) -> Option<&[Self::Media]> {
+        None
+    }
+
+fn to_toast(&self) -> Toast {
+        let mut toast = Toast::new();
+		
+		info!("{}", &self.text);
+		toast.text2(&self.text);
+
+		toast
+    }
+}
+
+#[derive(Deserialize, Debug)]
+#[serde(rename_all = "camelCase")]
+pub struct StreamContent {
+	id: i64,
+	#[serde(deserialize_with = "de_markdown_string")]
+	description: String,
+	#[serde(deserialize_with = "de_markdown_string")]
+	title: String,
+	room: String,
+	#[serde(default = "Utc::now")]
+	#[serde(deserialize_with = "str_to_date")]
+	started_at: DateTime<Utc>,
+	#[serde(flatten)]
+	media: StreamMedia
+}
+
+impl ContentType for StreamContent {
+	type Media = StreamMedia;
+
+	fn get_type() -> &'static str {
+		"Stream"
+	}
+
+	fn get_media(&self) -> Option<&[Self::Media]> {
+		Some(slice::from_ref(&self.media))
+	}
+
+	fn to_toast(&self) -> Toast {
+		let mut toast = Toast::new();
+
+		if !self.title.is_empty() {
+			info!("{}", &self.title);
+			toast.text2(&self.title);
+		}
+
+		if !self.description.is_empty() {
+			info!("{}", &self.description);
+			toast.text3(&self.description);
+		}
+
+		toast
 	}
 }
 
 fn get_thumbnail<T: ViewableMedia>(media: &[T]) -> Option<&str> {
 	media
 		.iter()
-		.find_map(|media| media.get().thumbnail.as_deref().filter(|s| s != &""))
+		.find_map(|media| media.get().thumbnail.filter(|s| !s.is_empty())).map(|x| &**x)
 }
 
 async fn handle_content<T: ContentType>(
@@ -213,7 +287,7 @@ async fn handle_content<T: ContentType>(
 				.with_placement(ImagePlacement::AppLogoOverride),
 		);
 
-	if let Some(thumb) = get_thumbnail(content.get_media()) {
+	if let Some(thumb) = content.get_media().and_then(get_thumbnail) {
 		let thumb = client
 			.fetch_file(thumb, TEMPDIR.wait().path(), None)
 			.await?;
@@ -246,8 +320,8 @@ pub struct Media {
 }
 
 pub struct _MediaInner<'a> {
-	source: &'a Option<String>,
-	thumbnail: &'a Option<String>,
+	source: Option<&'a String>,
+	thumbnail: Option<&'a String>,
 }
 
 pub trait ViewableMedia {
@@ -268,8 +342,8 @@ pub struct PostMedia {
 impl ViewableMedia for PostMedia {
 	fn get(&self) -> _MediaInner {
 		_MediaInner {
-			source: &self.full,
-			thumbnail: &self.preview,
+			source: self.full.as_ref(),
+			thumbnail: self.preview.as_ref(),
 		}
 	}
 
@@ -294,8 +368,8 @@ pub struct MessageMedia {
 impl ViewableMedia for MessageMedia {
 	fn get(&self) -> _MediaInner {
 		_MediaInner {
-			source: &self.src,
-			thumbnail: &self.preview,
+			source: self.src.as_ref(),
+			thumbnail: self.preview.as_ref(),
 		}
 	}
 
@@ -330,8 +404,8 @@ pub struct StoryMedia {
 impl ViewableMedia for StoryMedia {
 	fn get(&self) -> _MediaInner {
 		_MediaInner {
-			source: &self.files.source.url,
-			thumbnail: &self.files.preview.url,
+			source: self.files.source.url.as_ref(),
+			thumbnail: self.files.preview.url.as_ref(),
 		}
 	}
 
@@ -343,6 +417,29 @@ impl ViewableMedia for StoryMedia {
 		self.shared.created_at.timestamp()
 	}
 }
+
+
+// TODO: actually make use of this
+#[derive(Deserialize, Debug)]
+#[serde(rename_all = "camelCase")]
+pub struct StreamMedia {
+	thumb_url: String
+}
+
+impl ViewableMedia for StreamMedia {
+	fn get(&self) -> _MediaInner {
+		_MediaInner { source: None, thumbnail: None }
+	}
+
+	fn media_type(&self) -> &MediaTypes {
+		&MediaTypes::Photo
+	}
+
+	fn unix_time(&self) -> i64 {
+		Utc::now().timestamp()
+	}
+}
+
 
 #[derive(Deserialize, Clone, Debug)]
 #[serde(rename_all = "camelCase")]
@@ -376,11 +473,31 @@ pub struct StoryMessage {
 }
 
 #[derive(Deserialize, Debug)]
+#[serde(rename_all = "camelCase")]
+pub struct NotificationMessage {
+	user: User,
+	#[serde(rename = "type")]
+	notif_type: String,
+	sub_type: String,
+	#[serde(flatten)]
+	content: NotificationContent
+}
+
+#[derive(Deserialize, Debug)]
+#[serde(rename_all = "camelCase")]
+pub struct StreamMessage {
+	user: User,
+	#[serde(flatten)]
+	content: StreamContent
+}
+
+#[derive(Deserialize, Debug)]
 #[serde(rename_all = "snake_case")]
 pub enum TaggedMessageType {
 	PostPublished(PostPublishedMessage),
 	Api2ChatMessage(ChatMessage),
 	Stories(Vec<StoryMessage>),
+	Stream(StreamMessage)
 }
 
 #[derive(Deserialize, Debug)]
@@ -388,12 +505,14 @@ pub enum TaggedMessageType {
 pub enum MessageType {
 	Tagged(TaggedMessageType),
 	Connected(ConnectedMessage),
+	#[serde(deserialize_with = "notitication_message")]
+	NewMessage(NotificationMessage),
 	Error(ErrorMessage),
 }
 
 async fn download_media<T: ViewableMedia>(client: &Client, media: &[T], path: &Path) {
 	join_all(media.iter().filter_map(|media| {
-		media.get().source.as_ref().map(|url| async move {
+		media.get().source.map(|url| async move {
 			client
 				.fetch_file(
 					url,
@@ -432,10 +551,14 @@ impl Handleable for MessageType {
 
 				MANAGER.wait().show(&toast)?;
 				Ok(())
-			}
+			},
 			Self::Error(msg) => {
 				error!("Error message received: {:?}", msg);
 				bail!("websocket received error message with code {}", msg.error)
+			},
+			Self::NewMessage(msg) => {
+				let client = Client::with_auth().await?;
+				msg.handle(&client).await
 			}
 			Self::Tagged(tagged) => tagged.handle_message().await,
 		};
@@ -456,6 +579,9 @@ impl Handleable for TaggedMessageType {
 					.into_iter()
 					.find(|res| res.is_err())
 					.unwrap_or(Ok(()))
+			},
+			TaggedMessageType::Stream(msg) => {
+				msg.handle(&client).await
 			}
 		}
 	}
@@ -476,16 +602,18 @@ pub trait Message {
 		let path = Path::new("data")
 			.join(&username)
 			.join(PostContent::get_type());
-		let download = download_media(client, content.get_media(), &path);
+		let download = content.get_media().map(|media| {
+			download_media(client, media, &path)
+		});
 
-		if settings.should_download(username) {
+		if let Some(download) = download && settings.should_download(username) {
 			if settings.should_notify(username) {
-				return join(notify, download).await.0;
+				return join(notify, download).await.0
 			} else {
 				download.await;
 			}
 		} else if settings.should_notify(username) {
-			return notify.await;
+			return notify.await
 		}
 
 		Ok(())
@@ -497,13 +625,8 @@ impl Message for PostPublishedMessage {
 	async fn handle(&self, client: &Client) -> anyhow::Result<()> {
 		info!("Post message received: {:?}", self);
 
-		let (user, content) = try_join(
-			client.fetch_user(&self.user_id),
-			client.fetch_content(&self.id),
-		)
-		.await?;
-
-		Self::shared(&user, &content, client).await
+		let content = client.fetch_content(&self.id).await?;
+		Self::shared(&content.author, &content, client).await
 	}
 }
 
@@ -522,5 +645,21 @@ impl Message for StoryMessage {
 
 		let user = client.fetch_user(&self.user_id.to_string()).await?;
 		Self::shared(&user, &self.content, client).await
+	}
+}
+
+#[async_trait]
+impl Message for NotificationMessage {
+	async fn handle(&self, client: &Client) -> anyhow::Result<()> {
+		info!("Notification message received: {:?}", self);
+		Self::shared(&self.user, &self.content, client).await
+	}
+}
+
+#[async_trait]
+impl Message for StreamMessage {
+	async fn handle(&self, client: &Client) -> anyhow::Result<()> {
+		info!("Stream message received: {:?}", self);
+		Self::shared(&self.user, &self.content, client).await
 	}
 }
