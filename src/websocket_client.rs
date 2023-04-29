@@ -1,4 +1,4 @@
-use super::message_types::{self, Handleable};
+use crate::structs;
 
 use anyhow::{anyhow, bail};
 use futures_util::{SinkExt, StreamExt};
@@ -15,7 +15,7 @@ impl WebSocketClient {
 	pub fn new() -> anyhow::Result<Self> {
 		Ok(Self {
 			socket: None,
-			heartbeat: Message::Text(serde_json::to_string(&message_types::GetOnlinesMessage {
+			heartbeat: Message::Text(serde_json::to_string(&structs::GetOnlinesMessage {
 				act: "get_onlines",
 				ids: &[],
 			})?),
@@ -41,7 +41,7 @@ impl WebSocketClient {
 
 			socket
 				.send(
-					serde_json::to_string(&message_types::ConnectMessage {
+					serde_json::to_string(&structs::ConnectMessage {
 						act: "connect",
 						token,
 					})?
@@ -56,7 +56,7 @@ impl WebSocketClient {
 				msg = self.wait_for_message() => {
 					if let Some(msg) = msg? {
 						match msg {
-							message_types::MessageType::Connected(_) => {
+							structs::MessageType::Connected(_) => {
 								if msg.handle_message().await.is_ok() {
 									success = true;
 								}
@@ -108,21 +108,22 @@ impl WebSocketClient {
 		Err(anyhow!("Message loop interruped unexpectedly"))
 	}
 
-	async fn wait_for_message(&mut self) -> anyhow::Result<Option<message_types::MessageType>> {
+	async fn wait_for_message(&mut self) -> anyhow::Result<Option<structs::MessageType>> {
 		let reader = self.socket.as_mut().unwrap();
 		let msg = reader
 			.next()
 			.await
-			.ok_or_else(|| anyhow!("Message queue exhausted"))
-			??;
+			.ok_or_else(|| anyhow!("Message queue exhausted"))??;
 
 		msg.to_text()
 			.map_err(|err| err.into())
-			.inspect(|s| {
-				if *s != "{\"online\":[]}" {
-					debug!("Received message: {s}")
-				}
+			.map(|s| {
+				(!s.starts_with("{\"online\":[")).then(|| {
+					debug!("Received message: {s}");
+					serde_json::from_str::<structs::MessageType>(s)
+					.inspect_err(|err| warn!("Message could not be parsed: {s}, reason: {err}"))
+					.ok()
+				}).flatten()
 			})
-			.map(|s| serde_json::from_str::<message_types::MessageType>(s).ok())
 	}
 }

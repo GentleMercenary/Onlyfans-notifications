@@ -1,13 +1,11 @@
-use std::collections::HashMap;
+use super::client::Cookie;
+use crate::structs::NotificationMessage;
 
 use chrono::{DateTime, Utc};
 use serde::de::Error;
 use serde::{Deserialize, Deserializer};
+use std::collections::HashMap;
 use strip_markdown::*;
-
-use crate::message_types::NotificationMessage;
-
-use super::client::Cookie;
 
 pub fn str_to_date<'de, D>(deserializer: D) -> Result<DateTime<Utc>, D::Error>
 where
@@ -34,7 +32,8 @@ where
 	let mut cookie_map: HashMap<&str, &str> = HashMap::new();
 	let filtered_str = s.replace(';', "");
 	for c in filtered_str.split(' ') {
-		let (k, v) = c.split_once('=')
+		let (k, v) = c
+			.split_once('=')
 			.ok_or_else(|| D::Error::custom("No Key/Value cookie pair found"))?;
 		cookie_map.insert(k, v);
 	}
@@ -69,15 +68,14 @@ where
 	non_empty_str(deserializer).map(str::to_owned)
 }
 
-pub fn notitication_message<'de, D>(deserializer: D) -> Result<NotificationMessage, D::Error>
-where 
-	D: Deserializer<'de>
+pub fn notification_message<'de, D>(deserializer: D) -> Result<NotificationMessage, D::Error>
+where
+	D: Deserializer<'de>,
 {
 	#[derive(Deserialize)]
 	struct Outer {
-		new_message: NotificationMessage
+		new_message: NotificationMessage,
 	}
 
-	Outer::deserialize(deserializer)
-		.map(|outer| outer.new_message)
+	Outer::deserialize(deserializer).map(|outer| outer.new_message)
 }

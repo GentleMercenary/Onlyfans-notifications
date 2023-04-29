@@ -1,13 +1,11 @@
-#![allow(dead_code)]
-
 use super::deserializers::{non_empty_string, parse_cookie};
-use super::message_types::*;
+use super::structs::{User, content::PostContent};
 
-use anyhow::{anyhow, Context};
 use async_trait::async_trait;
 use cached::proc_macro::once;
-use crypto::{digest::Digest, sha1::Sha1};
+use anyhow::{anyhow, Context};
 use futures::{StreamExt, TryFutureExt};
+use crypto::{digest::Digest, sha1::Sha1};
 use reqwest::{cookie::Jar, header, Client, Response, Url};
 use serde::Deserialize;
 use std::{
@@ -41,13 +39,10 @@ impl fmt::Display for Cookie {
 struct StaticParams {
 	static_param: String,
 	format: String,
-	checksum_indexes: Vec<usize>,
-	checksum_constants: Vec<i32>,
+	checksum_indexes: Vec<i32>,
 	checksum_constant: i32,
 	app_token: String,
 	remove_headers: Vec<String>,
-	error_code: i32,
-	message: String,
 }
 
 #[derive(Deserialize, Clone, Debug)]
@@ -89,12 +84,7 @@ pub trait ClientExt {
 	async fn fetch(&self, link: &str) -> anyhow::Result<Response>;
 	async fn fetch_user(&self, user_id: &str) -> anyhow::Result<User>;
 	async fn fetch_content(&self, post_id: &str) -> anyhow::Result<PostContent>;
-	async fn fetch_file(
-		&self,
-		url: &str,
-		path: &Path,
-		filename: Option<&str>,
-	) -> anyhow::Result<PathBuf>;
+	async fn fetch_file(&self, url: &str, path: &Path, filename: Option<&str>) -> anyhow::Result<(bool, PathBuf)>;
 }
 
 #[async_trait]
@@ -122,7 +112,7 @@ impl ClientExt for Client {
 			header::HeaderValue::from_str(&auth_params.cookie.auth_id)?,
 		);
 
-		for remove_header in static_params.remove_headers.iter() {
+		for remove_header in static_params.remove_headers {
 			headers.remove(remove_header);
 		}
 
@@ -160,6 +150,7 @@ impl ClientExt for Client {
 			.duration_since(UNIX_EPOCH)?
 			.as_secs()
 			.to_string();
+
 		let msg = [&static_params.static_param, &time, &path, auth_id].join("\n");
 		let mut hasher = Sha1::new();
 		hasher.input_str(&msg);
@@ -170,7 +161,7 @@ impl ClientExt for Client {
 		let checksum = static_params
 			.checksum_indexes
 			.iter()
-			.map(|x| -> i32 { sha1_b[*x] as i32 })
+			.map(|x| sha1_b[*x as usize] as i32)
 			.sum::<i32>()
 			+ static_params.checksum_constant;
 
@@ -188,15 +179,15 @@ impl ClientExt for Client {
 
 		info!("Fetching url {}", link);
 
-		Ok(
-			self.get(link)
-			.header("accept", "application/json, text/plain, */*")
-			.header("connection", "keep-alive")
-			.headers(headers)
-			.send()
-			.await
-			.and_then(|response| response.error_for_status())
-			.inspect_err(|err| error!("Error fetching {link}: {err:?}"))?)
+		self.get(link)
+		.header("accept", "application/json, text/plain, */*")
+		.header("connection", "keep-alive")
+		.headers(headers)
+		.send()
+		.await
+		.and_then(|response| response.error_for_status())
+		.inspect_err(|err| error!("Error fetching {link}: {err:?}"))
+		.map_err(|e| e.into())
 	}
 
 	async fn fetch(&self, link: &str) -> anyhow::Result<Response> {
@@ -225,12 +216,7 @@ impl ClientExt for Client {
 		.inspect_err(|err| error!("Error reading content {post_id}: {err:?}"))
 	}
 
-	async fn fetch_file(
-		&self,
-		url: &str,
-		path: &Path,
-		filename: Option<&str>,
-	) -> anyhow::Result<PathBuf> {
+	async fn fetch_file(&self, url: &str, path: &Path, filename: Option<&str>) -> anyhow::Result<(bool, PathBuf)> {
 		let parsed_url: Url = url.parse()?;
 		let full = filename
 			.or_else(|| {
@@ -246,7 +232,7 @@ impl ClientExt for Client {
 		let full_path = path.join(full);
 
 		if !full_path.exists() {
-			fs::create_dir_all(&path)?;
+			fs::create_dir_all(path)?;
 			let temp_path = path.join(filename.to_owned() + ".part");
 			let mut f = File::create(&temp_path)?;
 
@@ -265,6 +251,6 @@ impl ClientExt for Client {
 				.inspect_err(|err| error!("Error renaming file: {err:?}"))?;
 		}
 
-		Ok(full_path)
+		Ok((full_path.exists(), full_path))
 	}
 }

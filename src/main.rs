@@ -1,37 +1,41 @@
-#![windows_subsystem = "windows"]
+#![cfg_attr(	    all(not(debug_assertions), target_os = "windows"),
+    windows_subsystem = "windows"
+)]
+
 #![feature(result_option_inspect)]
+#![feature(let_chains)]
 
 mod client;
+mod structs;
+mod settings;
 mod deserializers;
-mod message_types;
 mod websocket_client;
 use client::ClientExt;
-mod settings;
+use cached::once_cell::sync::OnceCell;
 
 #[macro_use]
 extern crate log;
 extern crate simplelog;
 
-use cached::once_cell::sync::OnceCell;
+use tokio::select;
 use chrono::Local;
-use futures::TryFutureExt;
 use reqwest::Client;
+use tempdir::TempDir;
 use settings::Settings;
-use simplelog::{Config, LevelFilter, WriteLogger};
+use futures::TryFutureExt;
+use tokio_util::sync::CancellationToken;
+use trayicon::{Icon, MenuBuilder, TrayIconBuilder};
 use std::{
 	fs::{self, File},
 	path::Path,
 	sync::Arc,
 };
-use tempdir::TempDir;
-use tokio::select;
-use tokio_util::sync::CancellationToken;
-use trayicon::{Icon, MenuBuilder, TrayIconBuilder};
 use winit::{
 	event::Event,
 	event_loop::{ControlFlow, EventLoop, EventLoopProxy},
 };
 use winrt_toast::{register, Toast, ToastManager, ToastDuration};
+use simplelog::{Config, LevelFilter, WriteLogger, TermLogger, CombinedLogger, ColorChoice};
 
 static MANAGER: OnceCell<ToastManager> = OnceCell::new();
 static SETTINGS: OnceCell<Settings> = OnceCell::new();
@@ -61,9 +65,10 @@ async fn make_connection(proxy: EventLoopProxy<Events>, cancel_token: Arc<Cancel
 		.and_then(|response| response.text().map_err(|err| err.into()))
 		.and_then(|response| async move {
 			info!("Successful fetch for authentication parameters");
-
-			let init_msg: message_types::InitMessage = serde_json::from_str(&response)?;
+			
+			let init_msg: structs::InitMessage = serde_json::from_str(&response)?;
 			debug!("{:?}", init_msg);
+			info!("Connecting as {}", init_msg.name);
 			let mut socket = websocket_client::WebSocketClient::new()?;
 
 			let res = socket
@@ -87,7 +92,7 @@ async fn make_connection(proxy: EventLoopProxy<Events>, cancel_token: Arc<Cancel
 			res
 		})
 		.unwrap_or_else(|err| {
-			error!("Termination caused by: {:?}", err);
+			error!("Unexpected termination: {:?}", err);
 
 			let mut toast = Toast::new();
 			toast
@@ -114,19 +119,22 @@ enum Events {
 	ClickTrayIcon,
 	Connected,
 	Disconnected,
+	Clear,
 	Quit,
 }
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
-	fs::create_dir_all(&Path::new("logs")).expect("Created log directory");
-	let mut log_path = Path::new("logs").join(Local::now().format("%Y%m%d_%H%M%S").to_string());
+	let log_folder = Path::new("logs");
+	fs::create_dir_all(log_folder).expect("Created log directory");
+	let mut log_path = log_folder.join(Local::now().format("%Y%m%d_%H%M%S").to_string());
 	log_path.set_extension("log");
 
-	WriteLogger::init(
-		LevelFilter::Info,
-		Config::default(),
-		File::create(log_path).expect("Created log file"),
+	CombinedLogger::init(
+		vec![
+			WriteLogger::new(if cfg!(debug_assertions) { LevelFilter::Debug } else { LevelFilter::Info }, Config::default(), File::create(log_path).expect("Created log file")),
+			TermLogger::new(if cfg!(debug_assertions) { LevelFilter::Debug } else { LevelFilter::Info }, Config::default(), simplelog::TerminalMode::Mixed, ColorChoice::Auto)
+		]
 	)?;
 
 	register_app().inspect_err(|err| error!("Error registering app: {}", err))?;
@@ -154,7 +162,9 @@ async fn main() -> anyhow::Result<()> {
 		.icon_from_buffer(icon2)
 		.tooltip("OF notifier")
 		.on_click(Events::ClickTrayIcon)
-		.menu(MenuBuilder::new().item("Quit", Events::Quit))
+		.menu(MenuBuilder::new()
+		.item("Clear notifications", Events::Clear)
+			.item("Quit", Events::Quit))
 		.build()?;
 
 	let mut state = State::Connecting;
@@ -194,6 +204,9 @@ async fn main() -> anyhow::Result<()> {
 					cancel_token.cancel();
 					MANAGER.wait().clear().unwrap();
 					*control_flow = ControlFlow::Exit;
+				},
+				Events::Clear => {
+					MANAGER.wait().clear().unwrap();
 				}
 			}
 		}
@@ -202,32 +215,39 @@ async fn main() -> anyhow::Result<()> {
 
 #[cfg(test)]
 mod tests {
+	use std::sync::Once;
 	use std::thread::sleep;
 	use std::time::Duration;
 
 	use crate::settings::Whitelist;
 	use simplelog::{ColorChoice, TermLogger, TerminalMode};
-
-	use super::message_types::Handleable;
 	use super::*;
+
+	static INIT: Once = Once::new();
+
+	fn init() {
+		INIT.call_once(|| {
+			register_app().unwrap();
+			SETTINGS
+				.set(Settings {
+					notify: Whitelist::Full(true),
+					download: Whitelist::Full(false),
+				})
+				.unwrap();
+	
+			TermLogger::init(
+				LevelFilter::Debug,
+				Config::default(),
+				TerminalMode::Mixed,
+				ColorChoice::Auto,
+			)
+			.unwrap();
+		});
+	}
 
 	#[tokio::test]
 	async fn test_chat_message() {
-		register_app().unwrap();
-		SETTINGS
-			.set(Settings {
-				notify: Whitelist::Full(true),
-				download: Whitelist::Full(false),
-			})
-			.unwrap();
-
-		TermLogger::init(
-			LevelFilter::Debug,
-			Config::default(),
-			TerminalMode::Mixed,
-			ColorChoice::Auto,
-		)
-		.unwrap();
+		init();
 
 		let incoming = r#"{
 			"api2_chat_message": {
@@ -252,34 +272,18 @@ mod tests {
 			}
 		}"#;
 
-		let msg = serde_json::from_str::<message_types::MessageType>(incoming).unwrap();
+		let msg = serde_json::from_str::<structs::MessageType>(incoming).unwrap();
 		assert!(matches!(
 			msg,
-			message_types::MessageType::Tagged(message_types::TaggedMessageType::Api2ChatMessage(
-				_
-			))
+			structs::MessageType::Tagged(structs::TaggedMessageType::Api2ChatMessage(_))
 		));
 		msg.handle_message().await.unwrap();
-		sleep(Duration::from_millis(5000));
+		sleep(Duration::from_millis(1000));
 	}
 
 	#[tokio::test]
 	async fn test_post_message() {
-		register_app().unwrap();
-		SETTINGS
-			.set(Settings {
-				notify: Whitelist::Full(true),
-				download: Whitelist::Full(false),
-			})
-			.unwrap();
-
-		TermLogger::init(
-			LevelFilter::Debug,
-			Config::default(),
-			TerminalMode::Mixed,
-			ColorChoice::Auto,
-		)
-		.unwrap();
+		init();
 
 		// Onlyfan april fools post
 		let incoming = r#"{
@@ -290,32 +294,18 @@ mod tests {
 			}
 		}"#;
 
-		let msg = serde_json::from_str::<message_types::MessageType>(incoming).unwrap();
+		let msg = serde_json::from_str::<structs::MessageType>(incoming).unwrap();
 		assert!(matches!(
 			msg,
-			message_types::MessageType::Tagged(message_types::TaggedMessageType::PostPublished(_))
+			structs::MessageType::Tagged(structs::TaggedMessageType::PostPublished(_))
 		));
 		msg.handle_message().await.unwrap();
-		sleep(Duration::from_millis(5000));
+		sleep(Duration::from_millis(1000));
 	}
 
 	#[tokio::test]
 	async fn test_story_message() {
-		register_app().unwrap();
-		SETTINGS
-			.set(Settings {
-				notify: Whitelist::Full(true),
-				download: Whitelist::Full(false),
-			})
-			.unwrap();
-
-		TermLogger::init(
-			LevelFilter::Debug,
-			Config::default(),
-			TerminalMode::Mixed,
-			ColorChoice::Auto,
-		)
-		.unwrap();
+		init();
 
 		let incoming = r#"{
 			"stories": [
@@ -341,33 +331,19 @@ mod tests {
 			]
 		}"#;
 
-		let msg = serde_json::from_str::<message_types::MessageType>(incoming).unwrap();
+		let msg = serde_json::from_str::<structs::MessageType>(incoming).unwrap();
 		assert!(matches!(
 			msg,
-			message_types::MessageType::Tagged(message_types::TaggedMessageType::Stories(_))
+			structs::MessageType::Tagged(structs::TaggedMessageType::Stories(_))
 		));
 		msg.handle_message().await.unwrap();
-		sleep(Duration::from_millis(5000));
+		sleep(Duration::from_millis(1000));
 	}
 
 	
 	#[tokio::test]
 	async fn test_notification_message() {
-		register_app().unwrap();
-		SETTINGS
-			.set(Settings {
-				notify: Whitelist::Full(true),
-				download: Whitelist::Full(false),
-			})
-			.unwrap();
-
-		TermLogger::init(
-			LevelFilter::Debug,
-			Config::default(),
-			TerminalMode::Mixed,
-			ColorChoice::Auto,
-		)
-		.unwrap();
+		init();
 
 		let incoming = r#"{
 			"new_message":{
@@ -389,32 +365,18 @@ mod tests {
 			"hasSystemNotifications": false
 		 }"#;
 
-		let msg = serde_json::from_str::<message_types::MessageType>(incoming).unwrap();
+		let msg = serde_json::from_str::<structs::MessageType>(incoming).unwrap();
 		assert!(matches!(
 			msg,
-			message_types::MessageType::NewMessage(_)
+			structs::MessageType::NewMessage(_)
 		));
 		msg.handle_message().await.unwrap();
-		sleep(Duration::from_millis(5000));
+		sleep(Duration::from_millis(1000));
 	}
 
 	#[tokio::test]
 	async fn test_stream_message() {
-		register_app().unwrap();
-		SETTINGS
-			.set(Settings {
-				notify: Whitelist::Full(true),
-				download: Whitelist::Full(true),
-			})
-			.unwrap();
-
-		TermLogger::init(
-			LevelFilter::Debug,
-			Config::default(),
-			TerminalMode::Mixed,
-			ColorChoice::Auto,
-		)
-		.unwrap();
+		init();
 
 		let incoming = r#"{
 			"stream": {
@@ -433,14 +395,13 @@ mod tests {
 			}
 		}"#;
 
-		let msg = serde_json::from_str::<message_types::MessageType>(incoming).unwrap();
+		let msg = serde_json::from_str::<structs::MessageType>(incoming).unwrap();
 		assert!(matches!(
 			msg,
-			message_types::MessageType::Tagged(message_types::TaggedMessageType::Stream(
-				_
-			))
+			structs::MessageType::Tagged(structs::TaggedMessageType::Stream(_))
 		));
+
 		msg.handle_message().await.unwrap();
-		sleep(Duration::from_millis(5000));
+		sleep(Duration::from_millis(1000));
 	}
 }
