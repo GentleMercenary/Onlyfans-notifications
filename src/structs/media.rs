@@ -1,10 +1,9 @@
 #![allow(dead_code)]
-use crate::{client::ClientExt, deserializers::*};
+use crate::{client::{OFClient, Authorized, AuthedClient}, deserializers::*};
 
 use chrono::{DateTime, Utc};
 use filetime::{set_file_mtime, FileTime};
 use futures::future::join_all;
-use reqwest::Client;
 use serde::Deserialize;
 use std::path::Path;
 
@@ -152,7 +151,7 @@ impl ViewableMedia for StreamMedia {
 	}
 }
 
-pub async fn download_media<T: ViewableMedia>(client: &Client, media: &[T], path: &Path) {
+pub async fn download_media<T: ViewableMedia>(client: &OFClient<Authorized>, media: &[T], path: &Path) {
 	join_all(media.iter().filter_map(|media| {
 		media.get().source.map(|url| async move {
 			client

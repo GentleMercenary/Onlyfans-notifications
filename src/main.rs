@@ -10,7 +10,6 @@ mod structs;
 mod settings;
 mod deserializers;
 mod websocket_client;
-use client::ClientExt;
 use cached::once_cell::sync::OnceCell;
 
 #[macro_use]
@@ -19,7 +18,6 @@ extern crate simplelog;
 
 use tokio::select;
 use chrono::Local;
-use reqwest::Client;
 use tempdir::TempDir;
 use settings::Settings;
 use futures::TryFutureExt;
@@ -36,6 +34,8 @@ use winit::{
 };
 use winrt_toast::{register, Toast, ToastManager, ToastDuration};
 use simplelog::{Config, LevelFilter, WriteLogger, TermLogger, CombinedLogger, ColorChoice};
+
+use crate::client::{OFClient, UnauthedClient, AuthedClient};
 
 static MANAGER: OnceCell<ToastManager> = OnceCell::new();
 static SETTINGS: OnceCell<Settings> = OnceCell::new();
@@ -60,49 +60,44 @@ async fn make_connection(proxy: EventLoopProxy<Events>, cancel_token: Arc<Cancel
 	info!("Fetching authentication parameters");
 
 	let cloned_proxy = proxy.clone();
-	Client::with_auth()
-		.and_then(|client| async move { client.fetch(auth_link).await })
-		.and_then(|response| response.text().map_err(|err| err.into()))
-		.and_then(|response| async move {
-			info!("Successful fetch for authentication parameters");
-			
-			let init_msg: structs::InitMessage = serde_json::from_str(&response)?;
-			debug!("{:?}", init_msg);
-			info!("Connecting as {}", init_msg.name);
-			let mut socket = websocket_client::WebSocketClient::new()?;
+	OFClient::new().authorize()
+	.and_then(|client| async move {
+		let response = client.fetch(auth_link).await?;
+		Ok((client, response))
+	}).and_then(|(client, response)| async move {
+		let text = response.text().await?;
+		Ok((client, text))
+	}).and_then(|(client, response)| async move {
+		info!("Successful fetch for authentication parameters");
+		
+		let init_msg: structs::InitMessage = serde_json::from_str(&response)?;
+		debug!("{:?}", init_msg);
+		info!("Connecting as {}", init_msg.name);
+		let mut socket = websocket_client::WebSocketClient::new()
+			.connect(init_msg.ws_auth_token).await?;
 
-			let res = socket
-				.connect(init_msg.ws_auth_token)
-				.and_then(|socket| async move {
-					cloned_proxy.send_event(Events::Connected)?;
+		cloned_proxy.send_event(Events::Connected)?;
+		let res = select! {
+			_ = cancel_token.cancelled() => Ok(()),
+			res = socket.message_loop(&client) => res,
+		};
 
-					loop {
-						select! {
-							_ = cancel_token.cancelled() => break,
-							res = socket.message_loop() => return res
-						}
-					}
+		info!("Terminating websocket");
+		socket.close().await?;
+		res
+	})
+	.unwrap_or_else(|err| {
+		error!("Unexpected termination: {:?}", err);
 
-					Ok(())
-				})
-				.await;
+		let mut toast = Toast::new();
+		toast
+			.text1("OF Notifier")
+			.text2("An error occurred, disconnecting")
+			.duration(ToastDuration::Long);
 
-			info!("Terminating websocket");
-			socket.close().await?;
-			res
-		})
-		.unwrap_or_else(|err| {
-			error!("Unexpected termination: {:?}", err);
-
-			let mut toast = Toast::new();
-			toast
-				.text1("OF Notifier")
-				.text2("An error occurred, disconnecting")
-				.duration(ToastDuration::Long);
-
-			MANAGER.wait().show(&toast).unwrap();
-		})
-		.await;
+		MANAGER.wait().show(&toast).unwrap();
+	})
+	.await;
 
 	proxy.send_event(Events::Disconnected).unwrap()
 }
@@ -277,7 +272,9 @@ mod tests {
 			msg,
 			structs::MessageType::Tagged(structs::TaggedMessageType::Api2ChatMessage(_))
 		));
-		msg.handle_message().await.unwrap();
+
+		let client = OFClient::new().authorize().await.unwrap();
+		msg.handle_message(&client).await.unwrap();
 		sleep(Duration::from_millis(1000));
 	}
 
@@ -299,7 +296,9 @@ mod tests {
 			msg,
 			structs::MessageType::Tagged(structs::TaggedMessageType::PostPublished(_))
 		));
-		msg.handle_message().await.unwrap();
+
+		let client = OFClient::new().authorize().await.unwrap();
+		msg.handle_message(&client).await.unwrap();
 		sleep(Duration::from_millis(1000));
 	}
 
@@ -336,7 +335,9 @@ mod tests {
 			msg,
 			structs::MessageType::Tagged(structs::TaggedMessageType::Stories(_))
 		));
-		msg.handle_message().await.unwrap();
+
+		let client = OFClient::new().authorize().await.unwrap();
+		msg.handle_message(&client).await.unwrap();
 		sleep(Duration::from_millis(1000));
 	}
 
@@ -370,7 +371,9 @@ mod tests {
 			msg,
 			structs::MessageType::NewMessage(_)
 		));
-		msg.handle_message().await.unwrap();
+
+		let client = OFClient::new().authorize().await.unwrap();
+		msg.handle_message(&client).await.unwrap();
 		sleep(Duration::from_millis(1000));
 	}
 
@@ -401,7 +404,8 @@ mod tests {
 			structs::MessageType::Tagged(structs::TaggedMessageType::Stream(_))
 		));
 
-		msg.handle_message().await.unwrap();
+		let client = OFClient::new().authorize().await.unwrap();
+		msg.handle_message(&client).await.unwrap();
 		sleep(Duration::from_millis(1000));
 	}
 }

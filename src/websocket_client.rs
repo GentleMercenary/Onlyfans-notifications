@@ -1,63 +1,63 @@
-use crate::structs;
+use crate::{structs, client::{OFClient, UnauthedClient, Authorized}};
 
-use anyhow::{anyhow, bail};
+use anyhow::{anyhow, bail, Ok};
 use futures_util::{SinkExt, StreamExt};
 use std::time::Duration;
 use tokio::{net::TcpStream, time::sleep};
 use tokio_tungstenite::{connect_async, tungstenite::Message, MaybeTlsStream, WebSocketStream};
 
-pub struct WebSocketClient {
-	socket: Option<WebSocketStream<MaybeTlsStream<TcpStream>>>,
-	heartbeat: Message,
+pub struct Disconnected;
+pub struct Connected {
+	socket: WebSocketStream<MaybeTlsStream<TcpStream>>,
+	heartbeat: Message
 }
 
-impl WebSocketClient {
-	pub fn new() -> anyhow::Result<Self> {
-		Ok(Self {
-			socket: None,
-			heartbeat: Message::Text(serde_json::to_string(&structs::GetOnlinesMessage {
-				act: "get_onlines",
-				ids: &[],
-			})?),
-		})
+pub struct WebSocketClient<Connection> {
+	connection: Connection,
+}
+
+impl WebSocketClient<Disconnected> {
+	pub fn new() -> Self {
+		Self { connection: Disconnected }
 	}
 
-	pub async fn close(&mut self) -> tokio_tungstenite::tungstenite::Result<()> {
-		if let Some(socket) = self.socket.as_mut() {
-			socket.close(None).await?;
-		}
-		Ok(())
-	}
-
-	pub async fn connect(&mut self, token: &str) -> anyhow::Result<&mut Self> {
+	pub async fn connect(&mut self, token: &str) -> anyhow::Result<WebSocketClient<Connected>> {
 		info!("Creating websocket");
 		let (ws, _) = connect_async("wss://ws2.onlyfans.com/ws2/").await?;
 		info!("Websocket created");
-		self.socket = Some(ws);
+
+		let mut connected_client = WebSocketClient { 
+			connection: Connected {
+				socket: ws,
+				heartbeat: Message::Text(serde_json::to_string(&structs::GetOnlinesMessage {
+					act: "get_onlines",
+					ids: &[],
+				})?),
+			}
+		};
 
 		let mut success = false;
-		if let Some(socket) = self.socket.as_mut() {
 			info!("Sending connect message");
 
-			socket
-				.send(
-					serde_json::to_string(&structs::ConnectMessage {
-						act: "connect",
-						token,
-					})?
-					.into(),
-				)
-				.await?;
+			connected_client.connection.socket.send(
+				serde_json::to_string(&structs::ConnectMessage {
+					act: "connect",
+					token,
+				})?
+				.into(),
+			)
+			.await?;
 
 			let timeout = sleep(Duration::from_secs(30));
 			tokio::pin!(timeout);
 
 			tokio::select! {
-				msg = self.wait_for_message() => {
+				msg = connected_client.wait_for_message() => {
 					if let Some(msg) = msg? {
 						match msg {
 							structs::MessageType::Connected(_) => {
-								if msg.handle_message().await.is_ok() {
+								let client = OFClient::new().authorize().await?;
+								if msg.handle_message(&client).await.is_ok() {
 									success = true;
 								}
 							},
@@ -70,16 +70,22 @@ impl WebSocketClient {
 					error!("Timeout expired");
 				}
 			};
-		}
 
 		if success {
-			Ok(self)
+			Ok(connected_client)
+
 		} else {
 			bail!("Couldn't connect to websocket")
 		}
 	}
+}
 
-	pub async fn message_loop(&mut self) -> anyhow::Result<()> {
+impl WebSocketClient<Connected> {
+	pub async fn close(&mut self) -> tokio_tungstenite::tungstenite::Result<()> {
+		self.connection.socket.close(None).await
+	}
+
+	pub async fn message_loop(&mut self, client: &OFClient<Authorized>) -> anyhow::Result<()> {
 		info!("Starting websocket message loop");
 		let mut interval = tokio::time::interval(Duration::from_secs(20));
 		let mut msg_received = true;
@@ -88,7 +94,7 @@ impl WebSocketClient {
 			tokio::select! {
 				msg = self.wait_for_message() => {
 					if let Some(msg) = msg? {
-						let _ = msg.handle_message().await;
+						let _ = msg.handle_message(client).await;
 					}
 					msg_received = true;
 				},
@@ -98,8 +104,7 @@ impl WebSocketClient {
 						break;
 					}
 
-					let writer = self.socket.as_mut().ok_or_else(|| anyhow!(""))?;
-					writer.send(self.heartbeat.clone()).await?;
+					self.connection.socket.send(self.connection.heartbeat.clone()).await?;
 					msg_received = false;
 				}
 			}
@@ -109,8 +114,7 @@ impl WebSocketClient {
 	}
 
 	async fn wait_for_message(&mut self) -> anyhow::Result<Option<structs::MessageType>> {
-		let reader = self.socket.as_mut().unwrap();
-		let msg = reader
+		let msg = self.connection.socket
 			.next()
 			.await
 			.ok_or_else(|| anyhow!("Message queue exhausted"))??;

@@ -2,7 +2,7 @@
 pub mod content;
 pub mod media;
 
-use super::client::ClientExt;
+use crate::client::{OFClient, Authorized, AuthedClient};
 use crate::deserializers::{notification_message, de_markdown_string};
 use crate::{MANAGER, SETTINGS, TEMPDIR};
 
@@ -10,7 +10,7 @@ use anyhow::{anyhow, bail};
 use content::*;
 use futures::future::{join, join_all};
 use media::*;
-use reqwest::{Client, Url};
+use reqwest::Url;
 use serde::{Deserialize, Serialize};
 use std::path::Path;
 use winrt_toast::{
@@ -27,7 +27,7 @@ pub struct ConnectMessage<'a> {
 #[derive(Serialize, Debug)]
 pub struct GetOnlinesMessage {
 	pub act: &'static str,
-	pub ids: &'static [&'static u32],
+	pub ids: &'static [&'static u64],
 }
 
 #[derive(Deserialize, Debug)]
@@ -53,7 +53,7 @@ pub struct ConnectedMessage {
 #[derive(Deserialize, Clone, Debug)]
 #[serde(rename_all = "camelCase")]
 pub struct User {
-	id: u32,
+	id: u64,
 	name: String,
 	username: String,
 	avatar: String,
@@ -76,7 +76,7 @@ pub struct ChatMessage {
 #[derive(Deserialize, Debug)]
 #[serde(rename_all = "camelCase")]
 pub struct StoryMessage {
-	user_id: u32,
+	user_id: u64,
 	#[serde(flatten)]
 	content: StoryContent,
 }
@@ -127,7 +127,7 @@ fn get_thumbnail<T: ViewableMedia>(media: &[T]) -> Option<&str> {
 
 async fn handle_content<T: ContentType>(
 	content: &T,
-	client: &Client,
+	client: &OFClient<Authorized>,
 	user: &User,
 ) -> anyhow::Result<()> {
 	let parsed = user.avatar.parse::<Url>()?;
@@ -177,7 +177,7 @@ async fn handle_content<T: ContentType>(
 }
 
 impl MessageType {
-	pub async fn handle_message(self) -> anyhow::Result<()> {
+	pub async fn handle_message(self, client: &OFClient<Authorized>) -> anyhow::Result<()> {
 		return match self {
 			Self::Connected(_) => {
 				info!("Connect message received");
@@ -193,18 +193,15 @@ impl MessageType {
 				bail!("websocket received error message with code {}", msg.error)
 			}
 			Self::NewMessage(msg) => {
-				let client = Client::with_auth().await?;
 				msg.handle(&client).await
 			}
-			Self::Tagged(tagged) => tagged.handle_message().await,
+			Self::Tagged(tagged) => tagged.handle_message(client).await,
 		};
 	}
 }
 
 impl TaggedMessageType {
-	async fn handle_message(self) -> anyhow::Result<()> {
-		let client = Client::with_auth().await?;
-
+	async fn handle_message(self, client: &OFClient<Authorized>) -> anyhow::Result<()> {
 		match self {
 			TaggedMessageType::PostPublished(msg) => msg.handle(&client).await,
 			TaggedMessageType::Api2ChatMessage(msg) => msg.handle(&client).await,
@@ -223,7 +220,7 @@ impl TaggedMessageType {
 async fn shared<T: ContentType + Send + Sync>(
 	user: &User,
 	content: &T,
-	client: &Client,
+	client: &OFClient<Authorized>,
 ) -> anyhow::Result<()> {
 	let settings = SETTINGS.wait();
 
@@ -250,39 +247,39 @@ async fn shared<T: ContentType + Send + Sync>(
 }
 
 impl PostPublishedMessage {
-	pub async fn handle(&self, client: &Client) -> anyhow::Result<()> {
+	pub async fn handle(&self, client: &OFClient<Authorized>) -> anyhow::Result<()> {
 		info!("Post message received: {:?}", self);
 
-		let content = client.fetch_content(&self.id).await?;
+		let content = client.fetch_post(&self.id).await?;
 		shared(&content.author, &content, client).await
 	}
 }
 
 impl ChatMessage {
-	pub async fn handle(&self, client: &Client) -> anyhow::Result<()> {
+	pub async fn handle(&self, client: &OFClient<Authorized>) -> anyhow::Result<()> {
 		info!("Chat message received: {:?}", self);
 		shared(&self.from_user, &self.content, client).await
 	}
 }
 
 impl StoryMessage {
-	pub async fn handle(&self, client: &Client) -> anyhow::Result<()> {
+	pub async fn handle(&self, client: &OFClient<Authorized>) -> anyhow::Result<()> {
 		info!("Story message received: {:?}", self);
 
-		let user = client.fetch_user(&self.user_id.to_string()).await?;
+		let user = client.fetch_user(&self.user_id).await?;
 		shared(&user, &self.content, client).await
 	}
 }
 
 impl NotificationMessage {
-	pub async fn handle(&self, client: &Client) -> anyhow::Result<()> {
+	pub async fn handle(&self, client: &OFClient<Authorized>) -> anyhow::Result<()> {
 		info!("Notification message received: {:?}", self);
 		shared(&self.user, &self.content, client).await
 	}
 }
 
 impl StreamMessage {
-	pub async fn handle(&self, client: &Client) -> anyhow::Result<()> {
+	pub async fn handle(&self, client: &OFClient<Authorized>) -> anyhow::Result<()> {
 		info!("Stream message received: {:?}", self);
 		shared(&self.user, &self.content, client).await
 	}

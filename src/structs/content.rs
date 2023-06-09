@@ -148,7 +148,7 @@ impl ContentType for NotificationContent {
 #[derive(Deserialize, Debug)]
 #[serde(rename_all = "camelCase")]
 pub struct StreamContent {
-	id: i64,
+	id: u64,
 	#[serde(deserialize_with = "de_markdown_string")]
 	description: String,
 	#[serde(deserialize_with = "de_markdown_string")]
