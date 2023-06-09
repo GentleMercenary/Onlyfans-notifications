@@ -1,4 +1,3 @@
-#![allow(dead_code)]
 pub mod content;
 pub mod media;
 
@@ -7,9 +6,9 @@ use crate::deserializers::{notification_message, de_markdown_string};
 use crate::{MANAGER, SETTINGS, TEMPDIR};
 
 use anyhow::{anyhow, bail};
-use content::*;
+use content::{ContentType, MessageContent, NotificationContent, PostContent, StoryContent, StreamContent};
 use futures::future::{join, join_all};
-use media::*;
+use media::{ViewableMedia, download_media};
 use reqwest::Url;
 use serde::{Deserialize, Serialize};
 use std::path::Path;
@@ -39,7 +38,7 @@ pub struct InitMessage<'a> {
 	pub ws_auth_token: &'a str,
 }
 
-#[derive(Deserialize, Debug, Clone)]
+#[derive(Deserialize, Debug)]
 pub struct ErrorMessage {
 	pub error: u8,
 }
@@ -50,7 +49,7 @@ pub struct ConnectedMessage {
 	v: String,
 }
 
-#[derive(Deserialize, Clone, Debug)]
+#[derive(Deserialize, Debug)]
 #[serde(rename_all = "camelCase")]
 pub struct User {
 	id: u64,
@@ -121,33 +120,28 @@ pub enum MessageType {
 
 fn get_thumbnail<T: ViewableMedia>(media: &[T]) -> Option<&str> {
 	media
-		.iter()
-		.find_map(|media| media.get().thumbnail.filter(|s| !s.is_empty()))
+	.iter()
+	.find_map(|media| media.get().thumbnail.filter(|s| !s.is_empty()))
 }
 
-async fn handle_content<T: ContentType>(
-	content: &T,
-	client: &OFClient<Authorized>,
-	user: &User,
-) -> anyhow::Result<()> {
+async fn handle_content<T: ContentType>(content: &T, client: &OFClient<Authorized>, user: &User) -> anyhow::Result<()> {
 	let parsed = user.avatar.parse::<Url>()?;
 	let filename = parsed
-		.path_segments()
-		.and_then(|segments| {
-			let mut reverse_iter = segments.rev();
-			let ext = reverse_iter.next().and_then(|file| file.split('.').last());
-			let filename = reverse_iter.next();
+	.path_segments()
+	.and_then(|segments| {
+		let mut reverse_iter = segments.rev();
+		let ext = reverse_iter.next().and_then(|file| file.split('.').last());
+		let filename = reverse_iter.next();
 
-			Option::zip(filename, ext).map(|(filename, ext)| [filename, ext].join("."))
-		})
-		.ok_or_else(|| anyhow!("Filename unknown"))?;
+		Option::zip(filename, ext).map(|(filename, ext)| [filename, ext].join("."))
+	})
+	.ok_or_else(|| anyhow!("Filename unknown"))?;
 
 	let mut user_path = Path::new("data").join(&user.username);
 	std::fs::create_dir_all(&user_path)?;
 	user_path = user_path.canonicalize()?;
 
-	let (_, avatar) = client
-		.fetch_file(
+	let (_, avatar) = client.fetch_file(
 			&user.avatar,
 			&user_path.join("Profile").join("Avatars"),
 			Some(&filename),
@@ -157,15 +151,14 @@ async fn handle_content<T: ContentType>(
 	let content_type = <T as ContentType>::get_type();
 	let mut toast: Toast = content.to_toast();
 	toast
-		.header(Header::new(content_type, content_type, content_type))
-		.launch(user_path.to_str().unwrap())
-		.text1(&user.name)
-		.image(
-			1,
-			Image::new_local(avatar)?
-				.with_hint_crop(ImageHintCrop::Circle)
-				.with_placement(ImagePlacement::AppLogoOverride),
-		);
+	.header(Header::new(content_type, content_type, content_type))
+	.launch(user_path.to_str().unwrap())
+	.text1(&user.name)
+	.image(1,
+		Image::new_local(avatar)?
+		.with_hint_crop(ImageHintCrop::Circle)
+		.with_placement(ImagePlacement::AppLogoOverride),
+	);
 
 	if let Some(thumb) = content.get_media().and_then(get_thumbnail) {
 		let (_, thumb) = client.fetch_file(thumb, TEMPDIR.wait().path(), None).await?;
@@ -193,7 +186,7 @@ impl MessageType {
 				bail!("websocket received error message with code {}", msg.error)
 			}
 			Self::NewMessage(msg) => {
-				msg.handle(&client).await
+				msg.handle(client).await
 			}
 			Self::Tagged(tagged) => tagged.handle_message(client).await,
 		};
@@ -203,25 +196,21 @@ impl MessageType {
 impl TaggedMessageType {
 	async fn handle_message(self, client: &OFClient<Authorized>) -> anyhow::Result<()> {
 		match self {
-			TaggedMessageType::PostPublished(msg) => msg.handle(&client).await,
-			TaggedMessageType::Api2ChatMessage(msg) => msg.handle(&client).await,
-			TaggedMessageType::Stories(msg) => {
-				join_all(msg.iter().map(|story| story.handle(&client)))
-					.await
-					.into_iter()
-					.find(|res| res.is_err())
-					.unwrap_or(Ok(()))
+			Self::PostPublished(msg) => msg.handle(client).await,
+			Self::Api2ChatMessage(msg) => msg.handle(client).await,
+			Self::Stories(msg) => {
+				join_all(msg.iter().map(|story| story.handle(client)))
+				.await
+				.into_iter()
+				.find(Result::is_err)
+				.unwrap_or(Ok(()))
 			}
-			TaggedMessageType::Stream(msg) => msg.handle(&client).await,
+			Self::Stream(msg) => msg.handle(client).await,
 		}
 	}
 }
 
-async fn shared<T: ContentType + Send + Sync>(
-	user: &User,
-	content: &T,
-	client: &OFClient<Authorized>,
-) -> anyhow::Result<()> {
+async fn shared<T: ContentType + Send + Sync>(user: &User, content: &T, client: &OFClient<Authorized>) -> anyhow::Result<()> {
 	let settings = SETTINGS.wait();
 
 	let username = &user.username;
@@ -236,9 +225,9 @@ async fn shared<T: ContentType + Send + Sync>(
 	if let Some(download) = download && settings.should_download(username) {
 		if settings.should_notify(username) {
 			return join(notify, download).await.0
-		} else {
-			download.await;
-		}
+		} 
+
+		download.await;
 	} else if settings.should_notify(username) {
 		return notify.await
 	}

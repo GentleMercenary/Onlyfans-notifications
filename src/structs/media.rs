@@ -1,5 +1,4 @@
-#![allow(dead_code)]
-use crate::{client::{OFClient, Authorized, AuthedClient}, deserializers::*};
+use crate::{client::{OFClient, Authorized, AuthedClient}, deserializers::str_to_date};
 
 use chrono::{DateTime, Utc};
 use filetime::{set_file_mtime, FileTime};
@@ -32,12 +31,6 @@ pub struct CommonMedia<'a> {
 	pub thumbnail: Option<&'a str>,
 }
 
-pub trait ViewableMedia {
-	fn get(&self) -> CommonMedia;
-	fn media_type(&self) -> &MediaType;
-	fn unix_time(&self) -> i64;
-}
-
 #[derive(Deserialize, Debug)]
 #[serde(rename_all = "camelCase")]
 pub struct Media {
@@ -59,23 +52,6 @@ pub struct PostMedia {
 	shared: Media,
 }
 
-impl ViewableMedia for PostMedia {
-	fn get(&self) -> CommonMedia {
-		CommonMedia {
-			source: self.full.as_deref(),
-			thumbnail: self.preview.as_deref(),
-		}
-	}
-
-	fn media_type(&self) -> &MediaType {
-		&self.shared.media_type
-	}
-
-	fn unix_time(&self) -> i64 {
-		self.shared.created_at.timestamp()
-	}
-}
-
 #[derive(Deserialize, Debug)]
 #[serde(rename_all = "camelCase")]
 pub struct MessageMedia {
@@ -83,23 +59,6 @@ pub struct MessageMedia {
 	preview: Option<String>,
 	#[serde(flatten)]
 	shared: Media,
-}
-
-impl ViewableMedia for MessageMedia {
-	fn get(&self) -> CommonMedia {
-		CommonMedia {
-			source: self.src.as_deref(),
-			thumbnail: self.preview.as_deref(),
-		}
-	}
-
-	fn media_type(&self) -> &MediaType {
-		&self.shared.media_type
-	}
-
-	fn unix_time(&self) -> i64 {
-		self.shared.created_at.timestamp()
-	}
 }
 
 #[derive(Deserialize, Debug)]
@@ -110,6 +69,43 @@ pub struct StoryMedia {
 	shared: Media,
 }
 
+// TODO: actually make use of this
+#[derive(Deserialize, Debug)]
+#[serde(rename_all = "camelCase")]
+pub struct StreamMedia {
+	thumb_url: String,
+}
+
+pub trait ViewableMedia {
+	fn get(&self) -> CommonMedia;
+	fn media_type(&self) -> &MediaType;
+	fn unix_time(&self) -> i64;
+}
+
+impl ViewableMedia for PostMedia {
+	fn get(&self) -> CommonMedia {
+		CommonMedia {
+			source: self.full.as_deref(),
+			thumbnail: self.preview.as_deref(),
+		}
+	}
+
+	fn media_type(&self) -> &MediaType { &self.shared.media_type }
+	fn unix_time(&self) -> i64 { self.shared.created_at.timestamp() }
+}
+
+impl ViewableMedia for MessageMedia {
+	fn get(&self) -> CommonMedia {
+		CommonMedia {
+			source: self.src.as_deref(),
+			thumbnail: self.preview.as_deref(),
+		}
+	}
+
+	fn media_type(&self) -> &MediaType { &self.shared.media_type }
+	fn unix_time(&self) -> i64 { self.shared.created_at.timestamp() }
+}
+
 impl ViewableMedia for StoryMedia {
 	fn get(&self) -> CommonMedia {
 		CommonMedia {
@@ -118,20 +114,8 @@ impl ViewableMedia for StoryMedia {
 		}
 	}
 
-	fn media_type(&self) -> &MediaType {
-		&self.shared.media_type
-	}
-
-	fn unix_time(&self) -> i64 {
-		self.shared.created_at.timestamp()
-	}
-}
-
-// TODO: actually make use of this
-#[derive(Deserialize, Debug)]
-#[serde(rename_all = "camelCase")]
-pub struct StreamMedia {
-	thumb_url: String,
+	fn media_type(&self) -> &MediaType { &self.shared.media_type }
+	fn unix_time(&self) -> i64 { self.shared.created_at.timestamp() }
 }
 
 impl ViewableMedia for StreamMedia {
@@ -142,36 +126,30 @@ impl ViewableMedia for StreamMedia {
 		}
 	}
 
-	fn media_type(&self) -> &MediaType {
-		&MediaType::Photo
-	}
-
-	fn unix_time(&self) -> i64 {
-		Utc::now().timestamp()
-	}
+	fn media_type(&self) -> &MediaType { &MediaType::Photo }
+	fn unix_time(&self) -> i64 { Utc::now().timestamp() }
 }
 
 pub async fn download_media<T: ViewableMedia>(client: &OFClient<Authorized>, media: &[T], path: &Path) {
 	join_all(media.iter().filter_map(|media| {
 		media.get().source.map(|url| async move {
-			client
-				.fetch_file(
-					url,
-					&path.join(match media.media_type() {
-						MediaType::Photo => "Images",
-						MediaType::Audio => "Audios",
-						MediaType::Video | MediaType::Gif => "Videos",
-					}),
-					None,
-				)
-				.await
-				.inspect_err(|err| error!("Download failed: {err}"))
-				.map(|(downloaded, path)| {
-					if downloaded {
-						let _ = set_file_mtime(path, FileTime::from_unix_time(media.unix_time(), 0))
-							.inspect_err(|err| warn!("Error setting file modify time: {err}"));
-					}
-				})
+			client.fetch_file(
+				url,
+				&path.join(match media.media_type() {
+					MediaType::Photo => "Images",
+					MediaType::Audio => "Audios",
+					MediaType::Video | MediaType::Gif => "Videos",
+				}),
+				None,
+			)
+			.await
+			.inspect_err(|err| error!("Download failed: {err}"))
+			.map(|(downloaded, path)| {
+				if downloaded {
+					let _ = set_file_mtime(path, FileTime::from_unix_time(media.unix_time(), 0))
+						.inspect_err(|err| warn!("Error setting file modify time: {err}"));
+				}
+			})
 		})
 	}))
 	.await;

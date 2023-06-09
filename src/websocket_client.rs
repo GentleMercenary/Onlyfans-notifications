@@ -1,4 +1,4 @@
-use crate::{structs, client::{OFClient, UnauthedClient, Authorized}};
+use crate::{structs, client::{OFClient, Authorized}};
 
 use anyhow::{anyhow, bail, Ok};
 use futures_util::{SinkExt, StreamExt};
@@ -21,7 +21,7 @@ impl WebSocketClient<Disconnected> {
 		Self { connection: Disconnected }
 	}
 
-	pub async fn connect(&mut self, token: &str) -> anyhow::Result<WebSocketClient<Connected>> {
+	pub async fn connect(&mut self, token: &str, client: &OFClient<Authorized>) -> anyhow::Result<WebSocketClient<Connected>> {
 		info!("Creating websocket");
 		let (ws, _) = connect_async("wss://ws2.onlyfans.com/ws2/").await?;
 		info!("Websocket created");
@@ -56,8 +56,7 @@ impl WebSocketClient<Disconnected> {
 					if let Some(msg) = msg? {
 						match msg {
 							structs::MessageType::Connected(_) => {
-								let client = OFClient::new().authorize().await?;
-								if msg.handle_message(&client).await.is_ok() {
+								if msg.handle_message(client).await.is_ok() {
 									success = true;
 								}
 							},
@@ -120,7 +119,7 @@ impl WebSocketClient<Connected> {
 			.ok_or_else(|| anyhow!("Message queue exhausted"))??;
 
 		msg.to_text()
-			.map_err(|err| err.into())
+			.map_err(Into::into)
 			.map(|s| {
 				(!s.starts_with("{\"online\":[")).then(|| {
 					debug!("Received message: {s}");

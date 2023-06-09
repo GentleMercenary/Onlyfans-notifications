@@ -1,7 +1,4 @@
-#![cfg_attr(	    all(not(debug_assertions), target_os = "windows"),
-    windows_subsystem = "windows"
-)]
-
+#![cfg_attr(all(not(debug_assertions), target_os = "windows"), windows_subsystem = "windows")]
 #![feature(result_option_inspect)]
 #![feature(let_chains)]
 
@@ -74,7 +71,7 @@ async fn make_connection(proxy: EventLoopProxy<Events>, cancel_token: Arc<Cancel
 		debug!("{:?}", init_msg);
 		info!("Connecting as {}", init_msg.name);
 		let mut socket = websocket_client::WebSocketClient::new()
-			.connect(init_msg.ws_auth_token).await?;
+			.connect(init_msg.ws_auth_token, &client).await?;
 
 		cloned_proxy.send_event(Events::Connected)?;
 		let res = select! {

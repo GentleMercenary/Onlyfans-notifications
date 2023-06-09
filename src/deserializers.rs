@@ -5,7 +5,7 @@ use chrono::{DateTime, Utc};
 use serde::de::Error;
 use serde::{Deserialize, Deserializer};
 use std::collections::HashMap;
-use strip_markdown::*;
+use strip_markdown::strip_markdown;
 
 pub fn str_to_date<'de, D>(deserializer: D) -> Result<DateTime<Utc>, D::Error>
 where
@@ -57,8 +57,8 @@ where
 {
 	let s: &str = Deserialize::deserialize(deserializer)?;
 	(!s.is_empty())
-		.then_some(s)
-		.ok_or_else(|| D::Error::custom("Empty string"))
+	.then_some(s)
+	.ok_or_else(|| D::Error::custom("Empty string"))
 }
 
 pub fn non_empty_string<'de, D>(deserializer: D) -> Result<String, D::Error>

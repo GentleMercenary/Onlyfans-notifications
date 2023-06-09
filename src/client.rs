@@ -65,7 +65,7 @@ async fn get_params() -> anyhow::Result<(StaticParams, AuthParams)> {
 	Ok((
 		reqwest::get("https://raw.githubusercontent.com/DIGITALCRIMINALS/dynamic-rules/main/onlyfans.json")
 			.inspect_err(|err| error!("Error getting dynamic rules: {err:?}"))
-			.and_then(|response| response.json::<StaticParams>())
+			.and_then(Response::json::<StaticParams>)
 			.await
 			.inspect_err(|err| error!("Error reading dynamic rules: {err:?}"))?,
 		fs::read_to_string("auth.json")
@@ -78,13 +78,11 @@ async fn get_params() -> anyhow::Result<(StaticParams, AuthParams)> {
 }
 
 pub struct Unauthorized;
-pub struct Authorized {
-	client: Client
-}
+pub struct Authorized { client: Client }
 
 #[async_trait]
 pub trait UnauthedClient {
-	fn new() -> OFClient<Unauthorized>;
+	fn new() -> Self;
 	async fn authorize(self) -> anyhow::Result<OFClient<Authorized>>;
 }
 
@@ -104,7 +102,7 @@ pub struct OFClient<Authorization> {
 #[async_trait]
 impl UnauthedClient for OFClient<Unauthorized> {
 	fn new() -> Self {
-		OFClient { auth: Unauthorized }
+		Self { auth: Unauthorized }
 	}
 
 	async fn authorize(self) -> anyhow::Result<OFClient<Authorized>> {
@@ -127,10 +125,7 @@ impl UnauthedClient for OFClient<Unauthorized> {
 			headers.remove(remove_header);
 		}
 
-		headers.insert(
-			"app-token",
-			header::HeaderValue::from_str(&static_params.app_token)?,
-		);
+		headers.insert("app-token", header::HeaderValue::from_str(&static_params.app_token)?);
 
 		let client = reqwest::Client::builder()
 		.cookie_store(true)
@@ -159,7 +154,7 @@ impl AuthedClient for OFClient<Authorized> {
 		let mut auth_id = "0";
 		if let Some(q) = query {
 			auth_id = &auth_params.cookie.auth_id;
-			path = format!("{}?{}", path, q);
+			path = format!("{path}?{q}");
 			headers.insert("user-id", header::HeaderValue::from_str(auth_id)?);
 		}
 
@@ -181,8 +176,7 @@ impl AuthedClient for OFClient<Authorized> {
 			.map(|x| sha1_b[*x as usize] as i32)
 			.sum::<i32>() + static_params.checksum_constant;
 
-		headers.insert("sign",
-			header::HeaderValue::from_str(
+		headers.insert("sign", header::HeaderValue::from_str(
 				&static_params.format
 					.replacen("{}", &sha1_sign, 1)
 					.replacen("{:x}", &format!("{:x}", checksum.abs()), 1)
@@ -203,25 +197,25 @@ impl AuthedClient for OFClient<Authorized> {
 			.headers(headers)
 			.send()
 			.await
-			.and_then(|response| response.error_for_status())
+			.and_then(Response::error_for_status)
 			.inspect_err(|err| error!("Error fetching {link}: {err:?}"))
-			.map_err(|e| e.into())
+			.map_err(Into::into)
 		};
 
 		Retry::spawn(ExponentialBackoff::from_millis(2000).take(5), ifetch).await
 	}
 
 	async fn fetch_user(&self, user_id: &(impl fmt::Display + std::marker::Sync)) -> anyhow::Result<User> {
-		self.fetch(&format!("https://onlyfans.com/api2/v2/users/{}", user_id))
-		.and_then(|response| response.json::<User>().map_err(|err| err.into()))
+		self.fetch(&format!("https://onlyfans.com/api2/v2/users/{user_id}"))
+		.and_then(|response| response.json::<User>().map_err(Into::into))
 		.await
 		.inspect(|user| info!("Got user: {:?}", user))
 		.inspect_err(|err| error!("Error reading user {user_id}: {err:?}"))
 	}
 
 	async fn fetch_post(&self, post_id: &(impl fmt::Display + std::marker::Sync)) -> anyhow::Result<PostContent> {
-		self.fetch(&format!("https://onlyfans.com/api2/v2/posts/{}", post_id))
-		.and_then(|response| response.json::<PostContent>().map_err(|err| err.into()))
+		self.fetch(&format!("https://onlyfans.com/api2/v2/posts/{post_id}"))
+		.and_then(|response| response.json::<PostContent>().map_err(Into::into))
 		.await
 		.inspect(|content| info!("Got content: {:?}", content))
 		.inspect_err(|err| error!("Error reading content {post_id}: {err:?}"))
@@ -232,9 +226,9 @@ impl AuthedClient for OFClient<Authorized> {
 		let full = filename
 			.or_else(|| {
 				parsed_url
-					.path_segments()
-					.and_then(|segments| segments.last())
-					.and_then(|name| if name.is_empty() { None } else { Some(name) })
+				.path_segments()
+				.and_then(Iterator::last)
+				.and_then(|name| name.is_empty().then_some(name))
 			})
 			.ok_or_else(|| anyhow!("Filename unknown"))?;
 
