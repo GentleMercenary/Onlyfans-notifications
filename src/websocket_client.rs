@@ -7,10 +7,7 @@ use tokio::{net::TcpStream, time::sleep};
 use tokio_tungstenite::{connect_async, tungstenite::Message, MaybeTlsStream, WebSocketStream};
 
 pub struct Disconnected;
-pub struct Connected {
-	socket: WebSocketStream<MaybeTlsStream<TcpStream>>,
-	heartbeat: Message
-}
+pub struct Connected { socket: WebSocketStream<MaybeTlsStream<TcpStream>> }
 
 pub struct WebSocketClient<Connection> {
 	connection: Connection,
@@ -21,19 +18,13 @@ impl WebSocketClient<Disconnected> {
 		Self { connection: Disconnected }
 	}
 
-	pub async fn connect(&mut self, token: &str, client: &OFClient<Authorized>) -> anyhow::Result<WebSocketClient<Connected>> {
+	pub async fn connect(&mut self, token: &str) -> anyhow::Result<WebSocketClient<Connected>> {
 		info!("Creating websocket");
-		let (ws, _) = connect_async("wss://ws2.onlyfans.com/ws2/").await?;
+		let (socket, _) = connect_async("wss://ws2.onlyfans.com/ws2/").await?;
 		info!("Websocket created");
 
 		let mut connected_client = WebSocketClient { 
-			connection: Connected {
-				socket: ws,
-				heartbeat: Message::Text(serde_json::to_string(&structs::GetOnlinesMessage {
-					act: "get_onlines",
-					ids: &[],
-				})?),
-			}
+			connection: Connected { socket }
 		};
 
 		let mut success = false;
@@ -56,7 +47,7 @@ impl WebSocketClient<Disconnected> {
 					if let Some(msg) = msg? {
 						match msg {
 							structs::MessageType::Connected(_) => {
-								if msg.handle_message(client).await.is_ok() {
+								if msg.handle_message(None).await.is_ok() {
 									success = true;
 								}
 							},
@@ -93,7 +84,7 @@ impl WebSocketClient<Connected> {
 			tokio::select! {
 				msg = self.wait_for_message() => {
 					if let Some(msg) = msg? {
-						let _ = msg.handle_message(client).await;
+						let _ = msg.handle_message(Some(client)).await;
 					}
 					msg_received = true;
 				},
@@ -103,7 +94,12 @@ impl WebSocketClient<Connected> {
 						break;
 					}
 
-					self.connection.socket.send(self.connection.heartbeat.clone()).await?;
+					self.connection.socket.send(
+						Message::Text(serde_json::to_string(&structs::GetOnlinesMessage {
+							act: "get_onlines",
+							ids: &[],
+						})?)
+					).await?;
 					msg_received = false;
 				}
 			}

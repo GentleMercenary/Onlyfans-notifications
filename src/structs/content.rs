@@ -10,7 +10,7 @@ use winrt_toast::{content::text::TextPlacement, Text, Toast};
 #[derive(Deserialize, Debug)]
 #[serde(rename_all = "camelCase")]
 pub struct Content<T: ViewableMedia> {
-	id: u64,
+	pub id: u64,
 	#[serde(default = "Utc::now")]
 	#[serde(deserialize_with = "str_to_date")]
 	posted_at: DateTime<Utc>,
@@ -25,7 +25,7 @@ pub struct PostContent {
 	price: Option<f32>,
 	pub author: User,
 	#[serde(flatten)]
-	shared: Content<PostMedia>,
+	pub shared: Content<PostMedia>,
 }
 
 #[derive(Deserialize, Debug)]

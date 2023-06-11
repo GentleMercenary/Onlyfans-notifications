@@ -7,12 +7,15 @@ mod structs;
 mod settings;
 mod deserializers;
 mod websocket_client;
+use anyhow::Context;
 use cached::once_cell::sync::OnceCell;
 
 #[macro_use]
 extern crate log;
 extern crate simplelog;
 
+use deserializers::{parse_cookie, non_empty_string};
+use serde::Deserialize;
 use tokio::select;
 use chrono::Local;
 use tempdir::TempDir;
@@ -30,7 +33,7 @@ use winit::{
 	event_loop::{ControlFlow, EventLoop, EventLoopProxy},
 };
 use winrt_toast::{register, Toast, ToastManager, ToastDuration};
-use simplelog::{Config, LevelFilter, WriteLogger, TermLogger, CombinedLogger, ColorChoice};
+use simplelog::{Config, LevelFilter, WriteLogger, TermLogger,TerminalMode, CombinedLogger, ColorChoice};
 
 use crate::client::{OFClient, UnauthedClient, AuthedClient};
 
@@ -41,7 +44,7 @@ static TEMPDIR: OnceCell<TempDir> = OnceCell::new();
 fn register_app() -> anyhow::Result<()> {
 	let aum_id = "OFNotifier";
 	let icon_path = Path::new("res").join("icon.ico").canonicalize()?; // Doesn't work for some reason
-	register(aum_id, "OF noitifier", Some(icon_path.as_path()))?;
+	register(aum_id, "OF notifier", Some(icon_path.as_path()))?;
 	MANAGER
 		.set(ToastManager::new(aum_id))
 		.expect("Global toast manager set");
@@ -52,12 +55,47 @@ fn register_app() -> anyhow::Result<()> {
 	Ok(())
 }
 
+#[derive(Debug)]
+pub struct Cookie {
+	pub auth_id: String,
+	pub sess: String,
+	pub auth_hash: String,
+}
+
+#[derive(Deserialize, Debug)]
+pub struct AuthParams {
+	#[serde(deserialize_with = "parse_cookie")]
+	cookie: Cookie,
+	#[serde(deserialize_with = "non_empty_string")]
+	x_bc: String,
+	#[serde(deserialize_with = "non_empty_string")]
+	user_agent: String,
+}
+
+#[derive(Deserialize)]
+struct _AuthParams {
+	auth: AuthParams,
+}
+
+fn get_auth_params() -> anyhow::Result<AuthParams> {
+	fs::read_to_string("auth.json")
+	.context("auth.json")
+	.inspect_err(|err| error!("Error reading auth file: {err:?}"))
+	.and_then(|data| Ok(serde_json::from_str::<_AuthParams>(&data)?))
+	.inspect_err(|err| error!("Error reading auth data: {err:?}"))
+	.map(|params| params.auth)
+	.inspect(|params| debug!("{params:?}"))
+	.map_err(Into::into)
+}
+
 async fn make_connection(proxy: EventLoopProxy<Events>, cancel_token: Arc<CancellationToken>) {
 	let auth_link: &str = "https://onlyfans.com/api2/v2/users/me";
 	info!("Fetching authentication parameters");
 
 	let cloned_proxy = proxy.clone();
-	OFClient::new().authorize()
+	let params = get_auth_params().unwrap();
+
+	OFClient::new().authorize(params)
 	.and_then(|client| async move {
 		let response = client.fetch(auth_link).await?;
 		Ok((client, response))
@@ -71,7 +109,7 @@ async fn make_connection(proxy: EventLoopProxy<Events>, cancel_token: Arc<Cancel
 		debug!("{:?}", init_msg);
 		info!("Connecting as {}", init_msg.name);
 		let mut socket = websocket_client::WebSocketClient::new()
-			.connect(init_msg.ws_auth_token, &client).await?;
+			.connect(init_msg.ws_auth_token).await?;
 
 		cloned_proxy.send_event(Events::Connected)?;
 		let res = select! {
@@ -125,7 +163,7 @@ async fn main() -> anyhow::Result<()> {
 	CombinedLogger::init(
 		vec![
 			WriteLogger::new(if cfg!(debug_assertions) { LevelFilter::Debug } else { LevelFilter::Info }, Config::default(), File::create(log_path).expect("Created log file")),
-			TermLogger::new(if cfg!(debug_assertions) { LevelFilter::Debug } else { LevelFilter::Info }, Config::default(), simplelog::TerminalMode::Mixed, ColorChoice::Auto)
+			TermLogger::new(if cfg!(debug_assertions) { LevelFilter::Debug } else { LevelFilter::Info }, Config::default(), TerminalMode::Mixed, ColorChoice::Auto)
 		]
 	)?;
 
@@ -143,15 +181,13 @@ async fn main() -> anyhow::Result<()> {
 
 	let event_loop = EventLoop::<Events>::with_user_event();
 	let proxy = event_loop.create_proxy();
-	let icon = include_bytes!("../res/icon.ico");
-	let icon2 = include_bytes!("../res/icon2.ico");
 
-	let first_icon = Icon::from_buffer(icon, None, None)?;
-	let second_icon = Icon::from_buffer(icon2, None, None)?;
+	let first_icon = Icon::from_buffer(include_bytes!("../res/icon.ico"), None, None)?;
+	let second_icon = Icon::from_buffer(include_bytes!("../res/icon2.ico"), None, None)?;
 
 	let mut tray_icon = TrayIconBuilder::new()
 		.sender_winit(proxy.clone())
-		.icon_from_buffer(icon2)
+		.icon(second_icon.clone())
 		.tooltip("OF notifier")
 		.on_click(Events::ClickTrayIcon)
 		.menu(MenuBuilder::new()
@@ -212,7 +248,6 @@ mod tests {
 	use std::time::Duration;
 
 	use crate::settings::Whitelist;
-	use simplelog::{ColorChoice, TermLogger, TerminalMode};
 	use super::*;
 
 	static INIT: Once = Once::new();
@@ -221,11 +256,12 @@ mod tests {
 		INIT.call_once(|| {
 			register_app().unwrap();
 			SETTINGS
-				.set(Settings {
-					notify: Whitelist::Full(true),
-					download: Whitelist::Full(false),
-				})
-				.unwrap();
+			.set(Settings {
+				notify: Whitelist::Full(true),
+				download: Whitelist::Full(false),
+				like: Whitelist::Full(false),
+			})
+			.unwrap();
 	
 			TermLogger::init(
 				LevelFilter::Debug,
@@ -265,13 +301,11 @@ mod tests {
 		}"#;
 
 		let msg = serde_json::from_str::<structs::MessageType>(incoming).unwrap();
-		assert!(matches!(
-			msg,
-			structs::MessageType::Tagged(structs::TaggedMessageType::Api2ChatMessage(_))
-		));
+		assert!(matches!(msg, structs::MessageType::Tagged(structs::TaggedMessageType::Api2ChatMessage(_))));
 
-		let client = OFClient::new().authorize().await.unwrap();
-		msg.handle_message(&client).await.unwrap();
+		let params = get_auth_params().unwrap();
+		let client = OFClient::new().authorize(params).await.unwrap();
+		msg.handle_message(Some(&client)).await.unwrap();
 		sleep(Duration::from_millis(1000));
 	}
 
@@ -289,13 +323,11 @@ mod tests {
 		}"#;
 
 		let msg = serde_json::from_str::<structs::MessageType>(incoming).unwrap();
-		assert!(matches!(
-			msg,
-			structs::MessageType::Tagged(structs::TaggedMessageType::PostPublished(_))
-		));
+		assert!(matches!(msg, structs::MessageType::Tagged(structs::TaggedMessageType::PostPublished(_))));
 
-		let client = OFClient::new().authorize().await.unwrap();
-		msg.handle_message(&client).await.unwrap();
+		let params = get_auth_params().unwrap();
+		let client = OFClient::new().authorize(params).await.unwrap();
+		msg.handle_message(Some(&client)).await.unwrap();
 		sleep(Duration::from_millis(1000));
 	}
 
@@ -328,13 +360,11 @@ mod tests {
 		}"#;
 
 		let msg = serde_json::from_str::<structs::MessageType>(incoming).unwrap();
-		assert!(matches!(
-			msg,
-			structs::MessageType::Tagged(structs::TaggedMessageType::Stories(_))
-		));
+		assert!(matches!(msg, structs::MessageType::Tagged(structs::TaggedMessageType::Stories(_))));
 
-		let client = OFClient::new().authorize().await.unwrap();
-		msg.handle_message(&client).await.unwrap();
+		let params = get_auth_params().unwrap();
+		let client = OFClient::new().authorize(params).await.unwrap();
+		msg.handle_message(Some(&client)).await.unwrap();
 		sleep(Duration::from_millis(1000));
 	}
 
@@ -364,13 +394,11 @@ mod tests {
 		 }"#;
 
 		let msg = serde_json::from_str::<structs::MessageType>(incoming).unwrap();
-		assert!(matches!(
-			msg,
-			structs::MessageType::NewMessage(_)
-		));
+		assert!(matches!(msg, structs::MessageType::NewMessage(_)));
 
-		let client = OFClient::new().authorize().await.unwrap();
-		msg.handle_message(&client).await.unwrap();
+		let params = get_auth_params().unwrap();
+		let client = OFClient::new().authorize(params).await.unwrap();
+		msg.handle_message(Some(&client)).await.unwrap();
 		sleep(Duration::from_millis(1000));
 	}
 
@@ -401,8 +429,9 @@ mod tests {
 			structs::MessageType::Tagged(structs::TaggedMessageType::Stream(_))
 		));
 
-		let client = OFClient::new().authorize().await.unwrap();
-		msg.handle_message(&client).await.unwrap();
+		let params = get_auth_params().unwrap();
+		let client = OFClient::new().authorize(params).await.unwrap();
+		msg.handle_message(Some(&client)).await.unwrap();
 		sleep(Duration::from_millis(1000));
 	}
 }

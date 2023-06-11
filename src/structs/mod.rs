@@ -52,7 +52,7 @@ pub struct ConnectedMessage {
 #[derive(Deserialize, Debug)]
 #[serde(rename_all = "camelCase")]
 pub struct User {
-	id: u64,
+	pub id: u64,
 	name: String,
 	username: String,
 	avatar: String,
@@ -170,7 +170,7 @@ async fn handle_content<T: ContentType>(content: &T, client: &OFClient<Authorize
 }
 
 impl MessageType {
-	pub async fn handle_message(self, client: &OFClient<Authorized>) -> anyhow::Result<()> {
+	pub async fn handle_message(self, client: Option<&OFClient<Authorized>>) -> anyhow::Result<()> {
 		return match self {
 			Self::Connected(_) => {
 				info!("Connect message received");
@@ -186,9 +186,9 @@ impl MessageType {
 				bail!("websocket received error message with code {}", msg.error)
 			}
 			Self::NewMessage(msg) => {
-				msg.handle(client).await
+				msg.handle(client.unwrap()).await
 			}
-			Self::Tagged(tagged) => tagged.handle_message(client).await,
+			Self::Tagged(tagged) => tagged.handle_message(client.unwrap()).await,
 		};
 	}
 }
@@ -238,9 +238,15 @@ async fn shared<T: ContentType + Send + Sync>(user: &User, content: &T, client: 
 impl PostPublishedMessage {
 	pub async fn handle(&self, client: &OFClient<Authorized>) -> anyhow::Result<()> {
 		info!("Post message received: {:?}", self);
-
+		let settings = SETTINGS.wait();
+		
 		let content = client.fetch_post(&self.id).await?;
-		shared(&content.author, &content, client).await
+		if settings.should_like(&content.author.username) {
+			let (a, b) = join(client.like_post(&content), shared(&content.author, &content, client)).await;
+			a.and(b)
+		} else {
+			shared(&content.author, &content, client).await
+		}
 	}
 }
 

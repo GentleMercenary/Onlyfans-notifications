@@ -1,4 +1,4 @@
-use super::client::Cookie;
+use crate::Cookie;
 use crate::structs::NotificationMessage;
 
 use chrono::{DateTime, Utc};
@@ -47,7 +47,10 @@ where
 			.get("sess")
 			.ok_or_else(|| D::Error::custom("'sess' missing from cookie auth parameter"))?
 			.to_string(),
-		auth_hash: cookie_map.get("auth_hash").unwrap_or(&"").to_string(),
+		auth_hash: cookie_map
+			.get("auth_hash")
+			.ok_or_else(|| D::Error::custom("'auth_hash' missing from cookie auth parameter"))?
+			.to_string(),
 	})
 }
 
