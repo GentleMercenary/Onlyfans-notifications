@@ -1,4 +1,4 @@
-use crate::Cookie;
+use crate::client::Cookie;
 use crate::structs::NotificationMessage;
 
 use chrono::{DateTime, Utc};
@@ -12,9 +12,9 @@ where
 	D: Deserializer<'de>,
 {
 	let s: &str = Deserialize::deserialize(deserializer)?;
-	Ok(DateTime::parse_from_rfc3339(s)
-		.map(|date| date.with_timezone(&Utc))
-		.unwrap())
+	DateTime::parse_from_rfc3339(s)
+	.map(|date| date.with_timezone(&Utc))
+	.map_err(D::Error::custom)	
 }
 
 pub fn de_markdown_string<'de, D>(deserializer: D) -> Result<String, D::Error>

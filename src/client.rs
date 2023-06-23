@@ -1,22 +1,32 @@
-use crate::AuthParams;
-use super::structs::{User, content::PostContent};
+use crate::deserializers::{parse_cookie, non_empty_string};
+use crate::structs::content::{StoryContent, MessageContent};
+use crate::structs::{User, content::PostContent};
 
-use async_trait::async_trait;
+use serde::Deserialize;
 use cached::proc_macro::once;
 use anyhow::{anyhow, Context};
 use futures::{StreamExt, TryFutureExt};
 use crypto::{digest::Digest, sha1::Sha1};
+use tokio_retry::{strategy::FixedInterval, Retry};
 use reqwest::{cookie::Jar, header, Client, Response, Url};
-use serde::Deserialize;
-use std::{
-	fmt, fs,
-	fs::File,
-	io::Write,
-	path::{Path, PathBuf},
-	sync::Arc,
-	time::{Duration, SystemTime, UNIX_EPOCH},
-};
-use tokio_retry::{strategy::ExponentialBackoff, Retry};
+use std::{fmt, fs::{self, File}, io::Write, path::{Path, PathBuf}, sync::Arc, time::{SystemTime, UNIX_EPOCH}};
+
+#[derive(Debug)]
+pub struct Cookie {
+	pub auth_id: String,
+	pub sess: String,
+	pub auth_hash: String,
+}
+
+#[derive(Deserialize, Debug)]
+pub struct AuthParams {
+	#[serde(deserialize_with = "parse_cookie")]
+	cookie: Cookie,
+	#[serde(deserialize_with = "non_empty_string")]
+	x_bc: String,
+	#[serde(deserialize_with = "non_empty_string")]
+	user_agent: String,
+}
 
 #[derive(Deserialize, Debug, Clone)]
 struct StaticParams {
@@ -28,7 +38,7 @@ struct StaticParams {
 	remove_headers: Vec<String>,
 }
 
-#[once(time = 10, result = true, sync_writes = true)]
+#[once(time = 1800, result = true, sync_writes = true)]
 async fn get_static_params() -> anyhow::Result<StaticParams> {
 	reqwest::get("https://raw.githubusercontent.com/DIGITALCRIMINALS/dynamic-rules/main/onlyfans.json")
 	.inspect_err(|err| error!("Error getting dynamic rules: {err:?}"))
@@ -42,24 +52,19 @@ pub struct Unauthorized;
 #[derive(Debug)]
 pub struct Authorized { client: Client, params: AuthParams }
 
-#[async_trait]
-pub trait UnauthedClient {
-	fn new() -> Self;
-	async fn authorize(self, auth_params: AuthParams) -> anyhow::Result<OFClient<Authorized>>;
-}
-
 #[derive(Debug)]
-pub struct OFClient<Authorization> {
+pub struct OFClient<Authorization = Unauthorized> {
 	auth: Authorization,
 }
 
-#[async_trait]
-impl UnauthedClient for OFClient<Unauthorized> {
-	fn new() -> Self {
+impl OFClient {
+	pub fn new() -> Self {
 		Self { auth: Unauthorized }
 	}
+}
 
-	async fn authorize(self, params: AuthParams) -> anyhow::Result<OFClient<Authorized>> {
+impl OFClient<Unauthorized> {
+	pub async fn authorize(self, params: AuthParams) -> anyhow::Result<OFClient<Authorized>> {
 		let static_params = get_static_params().await?;
 
 		let cookie_jar = Jar::default();
@@ -85,7 +90,6 @@ impl UnauthedClient for OFClient<Unauthorized> {
 		.cookie_store(true)
 		.cookie_provider(Arc::new(cookie_jar))
 		.gzip(true)
-		.timeout(Duration::from_secs(30))
 		.default_headers(headers)
 		.build()?;
 
@@ -95,23 +99,15 @@ impl UnauthedClient for OFClient<Unauthorized> {
 	}
 }
 
-#[async_trait] 
-pub trait AuthedClient {
-	async fn make_headers(&self, link: &str) -> anyhow::Result<header::HeaderMap>;
-	async fn fetch(&self, link: &str) -> anyhow::Result<Response>;
-	async fn post(&self, link: &str) -> anyhow::Result<()>;
-	async fn fetch_user(&self, user_id: &(impl fmt::Display + std::marker::Sync)) -> anyhow::Result<User>;
-	async fn fetch_post(&self, post_id: &(impl fmt::Display + std::marker::Sync)) -> anyhow::Result<PostContent>;
-	async fn like_post(&self, post: &PostContent) -> anyhow::Result<()>;
-	async fn fetch_file(&self, url: &str, path: &Path, filename: Option<&str>) -> anyhow::Result<(bool, PathBuf)>;
-}
-
-#[async_trait]
-impl AuthedClient for OFClient<Authorized> {
-	async fn make_headers(&self, link: &str) -> anyhow::Result<header::HeaderMap> {
+impl OFClient<Authorized> {
+	pub async fn make_headers(&self, link: &str) -> anyhow::Result<header::HeaderMap> {
 		let static_params = get_static_params().await?;
 
 		let mut headers = header::HeaderMap::new();
+
+		headers.insert("accept", header::HeaderValue::from_static("application/json, text/plain, */*"));
+		headers.insert("connection", header::HeaderValue::from_static("keep-alive"));
+
 		let parsed_url = Url::parse(link)?;
 		let mut path = parsed_url.path().to_owned();
 		let query = parsed_url.query();
@@ -152,13 +148,11 @@ impl AuthedClient for OFClient<Authorized> {
 		Ok(headers)
 	}
 
-	async fn fetch(&self, link: &str) -> anyhow::Result<Response> {
-		let ifetch = || async move {
+	pub async fn get(&self, link: &str) -> anyhow::Result<Response> {
+		let iget = || async move {
 			let headers = self.make_headers(link).await?;
-	
+
 			self.auth.client.get(link)
-			.header("accept", "application/json, text/plain, */*")
-			.header("connection", "keep-alive")
 			.headers(headers)
 			.send()
 			.await
@@ -167,53 +161,68 @@ impl AuthedClient for OFClient<Authorized> {
 			.map_err(Into::into)
 		};
 
-		Retry::spawn(ExponentialBackoff::from_millis(2000).take(5), ifetch).await
+		Retry::spawn(FixedInterval::from_millis(1000).take(5), iget).await
 	}
 
-	async fn post(&self, link: &str) -> anyhow::Result<()> {
+	pub async fn post(&self, link: &str) -> anyhow::Result<Response> {
 		let ipost = || async move {
 			let headers = self.make_headers(link).await?;
 	
 			self.auth.client.post(link)
-			.header("accept", "application/json, text/plain, */*")
-			.header("connection", "keep-alive")
 			.headers(headers)
 			.send()
 			.await
 			.and_then(Response::error_for_status)
 			.inspect_err(|err| error!("Error posting to {link}: {err:?}"))
 			.map_err(Into::into)
-			.map(|_| ())
 		};
 
-		Retry::spawn(ExponentialBackoff::from_millis(2000).take(5), ipost).await
+		Retry::spawn(FixedInterval::from_millis(1000).take(5), ipost).await
 	}
 
-	async fn fetch_user(&self, user_id: &(impl fmt::Display + std::marker::Sync)) -> anyhow::Result<User> {
-		self.fetch(&format!("https://onlyfans.com/api2/v2/users/{user_id}"))
+	pub async fn get_user(&self, user_id: &(impl fmt::Display + std::marker::Sync)) -> anyhow::Result<User> {
+		self.get(&format!("https://onlyfans.com/api2/v2/users/{user_id}"))
 		.and_then(|response| response.json::<User>().map_err(Into::into))
 		.await
 		.inspect(|user| info!("Got user: {:?}", user))
 		.inspect_err(|err| error!("Error reading user {user_id}: {err:?}"))
 	}
 
-	async fn fetch_post(&self, post_id: &(impl fmt::Display + std::marker::Sync)) -> anyhow::Result<PostContent> {
-		self.fetch(&format!("https://onlyfans.com/api2/v2/posts/{post_id}"))
+	pub async fn get_post(&self, post_id: &(impl fmt::Display + std::marker::Sync)) -> anyhow::Result<PostContent> {
+		self.get(&format!("https://onlyfans.com/api2/v2/posts/{post_id}"))
 		.and_then(|response| response.json::<PostContent>().map_err(Into::into))
 		.await
 		.inspect(|content| info!("Got content: {:?}", content))
 		.inspect_err(|err| error!("Error reading content {post_id}: {err:?}"))
 	}
 
-	async fn like_post(&self, post: &PostContent) -> anyhow::Result<()> {
+	pub async fn like_post(&self, post: &PostContent) -> anyhow::Result<()> {
 		let user_id = post.author.id;
-		let post_id = post.shared.id;
+		let post_id = post.id;
 
 		self.post(&format!("https://onlyfans.com/api2/v2/posts/{post_id}/favorites/{user_id}"))
 		.await
+		.map(|_| ())
+	}
+	
+	pub async fn like_message(&self, message: &MessageContent) -> anyhow::Result<()> {
+		let message_id = message.id;
+
+		self.post(&format!("https://onlyfans.com/api2/v2/messages/{message_id}/like"))
+		.await
+		.map(|_| ())
 	}
 
-	async fn fetch_file(&self, url: &str, path: &Path, filename: Option<&str>) -> anyhow::Result<(bool, PathBuf)> {
+	pub async fn like_story(&self, story: &StoryContent) -> anyhow::Result<()> {
+		let story_id = story.id;
+
+		self.post(&format!("https://onlyfans.com/api2/v2/stories/{story_id}/like"))
+		.await
+		.map(|_| ())
+	}
+
+
+	pub async fn fetch_file(&self, url: &str, path: &Path, filename: Option<&str>) -> anyhow::Result<(bool, PathBuf)> {
 		let parsed_url: Url = url.parse()?;
 		let full = filename
 		.or_else(|| {
@@ -224,16 +233,16 @@ impl AuthedClient for OFClient<Authorized> {
 		})
 		.ok_or_else(|| anyhow!("Filename unknown"))?;
 	
-	let (filename, _) = full.rsplit_once('.').unwrap();
+	let (filename, _) = full.rsplit_once('.').expect("Split extension from filename");
 	
 	let full_path = path.join(full);
 	
 		if !full_path.exists() {
 			fs::create_dir_all(path)?;
-			let temp_path = path.join(filename.to_owned() + ".part");
-			let mut f = File::create(&temp_path)?;
+			let temp_path = path.join(filename).with_extension(".path");
+			let mut f = File::create(&temp_path).context(format!("Created file at {:?}", temp_path))?;
 
-			self.fetch(url)
+			self.get(url)
 			.and_then(|response| async move {
 				let mut stream = response.bytes_stream();
 				while let Some(item) = stream.next().await {
@@ -244,7 +253,7 @@ impl AuthedClient for OFClient<Authorized> {
 			})
 			.await
 			.inspect_err(|err| error!("{err:?}"))
-			.and_then(|_| Ok(fs::rename(&temp_path, &full_path)?))
+			.and_then(|_| fs::rename(&temp_path, &full_path).context(format!("Renamed {:?} to {:?}", temp_path, full_path)))
 			.inspect_err(|err| error!("Error renaming file: {err:?}"))?;
 		}
 

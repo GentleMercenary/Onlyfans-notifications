@@ -1,4 +1,4 @@
-#![cfg_attr(all(not(debug_assertions), target_os = "windows"), windows_subsystem = "windows")]
+#![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 #![feature(result_option_inspect)]
 #![feature(let_chains)]
 
@@ -6,80 +6,50 @@ mod client;
 mod structs;
 mod settings;
 mod deserializers;
-mod websocket_client;
-use anyhow::Context;
-use cached::once_cell::sync::OnceCell;
 
 #[macro_use]
 extern crate log;
 extern crate simplelog;
 
-use deserializers::{parse_cookie, non_empty_string};
-use serde::Deserialize;
 use tokio::select;
 use chrono::Local;
+mod websocket_client;
 use tempdir::TempDir;
 use settings::Settings;
+use serde::Deserialize;
 use futures::TryFutureExt;
+use client::{OFClient, AuthParams};
+use image::io::Reader as ImageReader;
+use cached::once_cell::sync::OnceCell;
 use tokio_util::sync::CancellationToken;
-use trayicon::{Icon, MenuBuilder, TrayIconBuilder};
-use std::{
-	fs::{self, File},
-	path::Path,
-	sync::Arc,
-};
-use winit::{
-	event::Event,
-	event_loop::{ControlFlow, EventLoop, EventLoopProxy},
-};
-use winrt_toast::{register, Toast, ToastManager, ToastDuration};
+use winrt_toast::{Toast, ToastManager, ToastDuration, register};
+use std::{fs::{self, File}, path::Path, sync::Arc, io::{Error, ErrorKind}};
 use simplelog::{Config, LevelFilter, WriteLogger, TermLogger,TerminalMode, CombinedLogger, ColorChoice};
-
-use crate::client::{OFClient, UnauthedClient, AuthedClient};
+use tao::{event_loop::{EventLoop, ControlFlow, EventLoopProxy}, window::Icon, system_tray::SystemTrayBuilder, menu::{ContextMenu, MenuItemAttributes}, event::{Event, TrayEvent}};
 
 static MANAGER: OnceCell<ToastManager> = OnceCell::new();
 static SETTINGS: OnceCell<Settings> = OnceCell::new();
 static TEMPDIR: OnceCell<TempDir> = OnceCell::new();
 
-fn register_app() -> anyhow::Result<()> {
+fn init() {
 	let aum_id = "OFNotifier";
-	let icon_path = Path::new("res").join("icon.ico").canonicalize()?; // Doesn't work for some reason
-	register(aum_id, "OF notifier", Some(icon_path.as_path()))?;
+	let icon_path = Path::new("icons").join("icon.png").canonicalize().expect("Found icon file");
+	register(aum_id, "OF notifier", Some(icon_path.as_path())).expect("Registered application");
+	
 	MANAGER
-		.set(ToastManager::new(aum_id))
-		.expect("Global toast manager set");
+	.set(ToastManager::new(aum_id))
+	.expect("Global toast manager set");
 
-	TEMPDIR
-		.set(TempDir::new("OF_thumbs")?)
-		.expect("Temporary thumbnail created succesfully");
-	Ok(())
-}
-
-#[derive(Debug)]
-pub struct Cookie {
-	pub auth_id: String,
-	pub sess: String,
-	pub auth_hash: String,
-}
-
-#[derive(Deserialize, Debug)]
-pub struct AuthParams {
-	#[serde(deserialize_with = "parse_cookie")]
-	cookie: Cookie,
-	#[serde(deserialize_with = "non_empty_string")]
-	x_bc: String,
-	#[serde(deserialize_with = "non_empty_string")]
-	user_agent: String,
-}
-
-#[derive(Deserialize)]
-struct _AuthParams {
-	auth: AuthParams,
+	TempDir::new("OF_thumbs")
+	.and_then(|dir| TEMPDIR.set(dir).map_err(|_| Error::new(ErrorKind::Other, "OnceCell couldn't set")))
+	.expect("Temporary thumbnail created succesfully");
 }
 
 fn get_auth_params() -> anyhow::Result<AuthParams> {
+	#[derive(Deserialize)]
+	struct _AuthParams { auth: AuthParams }
+
 	fs::read_to_string("auth.json")
-	.context("auth.json")
 	.inspect_err(|err| error!("Error reading auth file: {err:?}"))
 	.and_then(|data| Ok(serde_json::from_str::<_AuthParams>(&data)?))
 	.inspect_err(|err| error!("Error reading auth data: {err:?}"))
@@ -93,11 +63,11 @@ async fn make_connection(proxy: EventLoopProxy<Events>, cancel_token: Arc<Cancel
 	info!("Fetching authentication parameters");
 
 	let cloned_proxy = proxy.clone();
-	let params = get_auth_params().unwrap();
 
-	OFClient::new().authorize(params)
+	futures::future::ready(get_auth_params())
+	.and_then(|params| OFClient::new().authorize(params))
 	.and_then(|client| async move {
-		let response = client.fetch(auth_link).await?;
+		let response = client.get(auth_link).await?;
 		Ok((client, response))
 	}).and_then(|(client, response)| async move {
 		let text = response.text().await?;
@@ -109,12 +79,12 @@ async fn make_connection(proxy: EventLoopProxy<Events>, cancel_token: Arc<Cancel
 		debug!("{:?}", init_msg);
 		info!("Connecting as {}", init_msg.name);
 		let mut socket = websocket_client::WebSocketClient::new()
-			.connect(init_msg.ws_auth_token).await?;
+			.connect(init_msg.ws_auth_token, &client).await?;
 
 		cloned_proxy.send_event(Events::Connected)?;
 		let res = select! {
 			_ = cancel_token.cancelled() => Ok(()),
-			res = socket.message_loop(&client) => res,
+			res = socket.message_loop(client) => res,
 		};
 
 		info!("Terminating websocket");
@@ -130,28 +100,18 @@ async fn make_connection(proxy: EventLoopProxy<Events>, cancel_token: Arc<Cancel
 			.text2("An error occurred, disconnecting")
 			.duration(ToastDuration::Long);
 
-		MANAGER.wait().show(&toast).unwrap();
+		MANAGER.wait().show(&toast).expect("Showed error notification");
 	})
 	.await;
 
-	proxy.send_event(Events::Disconnected).unwrap()
+	proxy.send_event(Events::Disconnected).expect("Sent disconnect message")
 }
 
 #[derive(PartialEq, Eq)]
-enum State {
-	Disconnected,
-	Connecting,
-	Connected,
-}
+enum State { Disconnected, Connected }
 
 #[derive(Clone, Eq, PartialEq, Debug)]
-enum Events {
-	ClickTrayIcon,
-	Connected,
-	Disconnected,
-	Clear,
-	Quit,
-}
+enum Events { Connected, Disconnected, /* Clear,*/ }
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
@@ -167,7 +127,7 @@ async fn main() -> anyhow::Result<()> {
 		]
 	)?;
 
-	register_app().inspect_err(|err| error!("Error registering app: {}", err))?;
+	init();
 
 	let s = fs::read_to_string("settings.json")
 		.inspect_err(|err| error!("Error reading settings.json: {}", err))?;
@@ -182,256 +142,83 @@ async fn main() -> anyhow::Result<()> {
 	let event_loop = EventLoop::<Events>::with_user_event();
 	let proxy = event_loop.create_proxy();
 
-	let first_icon = Icon::from_buffer(include_bytes!("../res/icon.ico"), None, None)?;
-	let second_icon = Icon::from_buffer(include_bytes!("../res/icon2.ico"), None, None)?;
+	let first_icon = ImageReader::open(Path::new("icons").join("icon.png"))
+	.map_err(<anyhow::Error>::from)
+	.and_then(|reader| reader.decode().map_err(<anyhow::Error>::from))
+	.and_then(|image| {
+		let width = image.width();
+		let height = image.height();
+		Icon::from_rgba(image.into_bytes(), width, height)
+		.map_err(<anyhow::Error>::from)
+	})?;
 
-	let mut tray_icon = TrayIconBuilder::new()
-		.sender_winit(proxy.clone())
-		.icon(second_icon.clone())
-		.tooltip("OF notifier")
-		.on_click(Events::ClickTrayIcon)
-		.menu(MenuBuilder::new()
-		.item("Clear notifications", Events::Clear)
-			.item("Quit", Events::Quit))
-		.build()?;
+	let second_icon = ImageReader::open(Path::new("icons").join("icon2.png"))
+	.map_err(<anyhow::Error>::from)
+	.and_then(|reader| reader.decode().map_err(<anyhow::Error>::from))
+	.and_then(|image| {
+		let width = image.width();
+		let height = image.height();
+		Icon::from_rgba(image.into_bytes(), width, height)
+		.map_err(<anyhow::Error>::from)
+	})?;
 
-	let mut state = State::Connecting;
+	let mut tray_menu = ContextMenu::new();
+	tray_menu.add_item(MenuItemAttributes::new("OF Notifier"))
+	.set_enabled(false);
+
+	let quit_id = tray_menu.add_item(MenuItemAttributes::new("Quit")).id();
+	let clear_id = tray_menu.add_item(MenuItemAttributes::new("Clear notifications")).id();
+
+	let mut tray_icon = SystemTrayBuilder::new(second_icon.clone(), Some(tray_menu))
+		.with_tooltip("OF notifier")
+		.build(&event_loop)?;
+
+	let mut state = State::Disconnected;
 	let mut cancel_token = Arc::new(CancellationToken::new());
 
-	tokio::spawn(make_connection(proxy.clone(), cancel_token.clone()));
 	event_loop.run(move |event, _, control_flow| {
 		*control_flow = ControlFlow::Wait;
 		let _ = tray_icon;
 
-		if let Event::UserEvent(e) = event {
-			match e {
-				Events::ClickTrayIcon => {
-					info!("Tray icon clicked");
-					if state == State::Connected {
-						info!("Disconnecting");
-						cancel_token.cancel();
-					} else if state == State::Disconnected {
-						cancel_token = Arc::new(CancellationToken::new());
-						info!("Connecting");
-						state = State::Connecting;
-						tokio::spawn(make_connection(proxy.clone(), cancel_token.clone()));
-					}
-				}
+		match event {
+			Event::UserEvent(e) => match e {
 				Events::Connected => {
-					tray_icon.set_icon(&first_icon).unwrap();
+					tray_icon.set_icon(first_icon.clone());
 					state = State::Connected;
 					info!("Connected");
 				}
 				Events::Disconnected => {
-					tray_icon.set_icon(&second_icon).unwrap();
+					tray_icon.set_icon(second_icon.clone());
 					state = State::Disconnected;
 					info!("Disconnected");
 				}
-				Events::Quit => {
-					info!("Closing application");
-					cancel_token.cancel();
-					MANAGER.wait().clear().unwrap();
-					*control_flow = ControlFlow::Exit;
-				},
-				Events::Clear => {
-					MANAGER.wait().clear().unwrap();
-				}
-			}
-		}
-	});
-}
-
-#[cfg(test)]
-mod tests {
-	use std::sync::Once;
-	use std::thread::sleep;
-	use std::time::Duration;
-
-	use crate::settings::Whitelist;
-	use super::*;
-
-	static INIT: Once = Once::new();
-
-	fn init() {
-		INIT.call_once(|| {
-			register_app().unwrap();
-			SETTINGS
-			.set(Settings {
-				notify: Whitelist::Full(true),
-				download: Whitelist::Full(false),
-				like: Whitelist::Full(false),
-			})
-			.unwrap();
-	
-			TermLogger::init(
-				LevelFilter::Debug,
-				Config::default(),
-				TerminalMode::Mixed,
-				ColorChoice::Auto,
-			)
-			.unwrap();
-		});
-	}
-
-	#[tokio::test]
-	async fn test_chat_message() {
-		init();
-
-		let incoming = r#"{
-			"api2_chat_message": {
-				"id": 0,
-				"text": "This is a message<br />\n to test <a href = \"/onlyfans\">MARKDOWN parsing</a> 👌<br />\n in notifications 💯",
-				"price": 3.99,
-				"fromUser": {
-					"avatar": "https://public.onlyfans.com/files/m/mk/mka/mkamcrf6rjmcwo0jj4zoavhmalzohe5a1640180203/avatar.jpg",
-					"id": 15585607,
-					"name": "OnlyFans",
-					"username": "onlyfans"
-				},
-				"media": [
-					{
-						"id": 0,
-						"canView": true,
-						"src": "https://raw.githubusercontent.com/allenbenz/winrt-notification/main/resources/test/chick.jpeg",
-						"preview": "https://raw.githubusercontent.com/allenbenz/winrt-notification/main/resources/test/flower.jpeg",
-						"type": "photo"
-					}
-				]
-			}
-		}"#;
-
-		let msg = serde_json::from_str::<structs::MessageType>(incoming).unwrap();
-		assert!(matches!(msg, structs::MessageType::Tagged(structs::TaggedMessageType::Api2ChatMessage(_))));
-
-		let params = get_auth_params().unwrap();
-		let client = OFClient::new().authorize(params).await.unwrap();
-		msg.handle_message(Some(&client)).await.unwrap();
-		sleep(Duration::from_millis(1000));
-	}
-
-	#[tokio::test]
-	async fn test_post_message() {
-		init();
-
-		// Onlyfan april fools post
-		let incoming = r#"{
-			"post_published": {
-				"id": "129720708",
-				"user_id" : "15585607",
-				"show_posts_in_feed":true
-			}
-		}"#;
-
-		let msg = serde_json::from_str::<structs::MessageType>(incoming).unwrap();
-		assert!(matches!(msg, structs::MessageType::Tagged(structs::TaggedMessageType::PostPublished(_))));
-
-		let params = get_auth_params().unwrap();
-		let client = OFClient::new().authorize(params).await.unwrap();
-		msg.handle_message(Some(&client)).await.unwrap();
-		sleep(Duration::from_millis(1000));
-	}
-
-	#[tokio::test]
-	async fn test_story_message() {
-		init();
-
-		let incoming = r#"{
-			"stories": [
-				{
-					"id": 0,
-					"userId": 15585607,
-					"media":[
-						{
-							"id": 0,
-							"canView": true,
-							"files": {
-								"source": {
-									"url": "https://raw.githubusercontent.com/allenbenz/winrt-notification/main/resources/test/chick.jpeg"
-								},
-								"preview": {
-									"url": "https://raw.githubusercontent.com/allenbenz/winrt-notification/main/resources/test/flower.jpeg"
-								}
-							},
-							"type": "photo"
+			},
+			Event::TrayEvent {event, ..} => {
+				if event == TrayEvent::LeftClick {
+					match state {
+						State::Connected => {
+							info!("Disconnecting");
+							cancel_token.cancel();
+						},
+						State::Disconnected => {
+							cancel_token = Arc::new(CancellationToken::new());
+							info!("Connecting");
+							tokio::spawn(make_connection(proxy.clone(), cancel_token.clone()));
 						}
-					]
-				}
-			]
-		}"#;
-
-		let msg = serde_json::from_str::<structs::MessageType>(incoming).unwrap();
-		assert!(matches!(msg, structs::MessageType::Tagged(structs::TaggedMessageType::Stories(_))));
-
-		let params = get_auth_params().unwrap();
-		let client = OFClient::new().authorize(params).await.unwrap();
-		msg.handle_message(Some(&client)).await.unwrap();
-		sleep(Duration::from_millis(1000));
-	}
-
-	
-	#[tokio::test]
-	async fn test_notification_message() {
-		init();
-
-		let incoming = r#"{
-			"new_message":{
-			   "id":"0",
-			   "type":"message",
-			   "text":"is currently running a promotion, <a href=\"https://onlyfans.com/onlyfans\">check it out</a>",
-			   "subType":"promoreg_for_expired",
-			   "user_id":"274000171",
-			   "isRead":false,
-			   "canGoToProfile":true,
-			   "newPrice":null,
-			   "user":{
-					"avatar": "https://public.onlyfans.com/files/m/mk/mka/mkamcrf6rjmcwo0jj4zoavhmalzohe5a1640180203/avatar.jpg",
-					"id": 15585607,
-					"name": "OnlyFans",
-					"username": "onlyfans"
+					}
 				}
 			},
-			"hasSystemNotifications": false
-		 }"#;
-
-		let msg = serde_json::from_str::<structs::MessageType>(incoming).unwrap();
-		assert!(matches!(msg, structs::MessageType::NewMessage(_)));
-
-		let params = get_auth_params().unwrap();
-		let client = OFClient::new().authorize(params).await.unwrap();
-		msg.handle_message(Some(&client)).await.unwrap();
-		sleep(Duration::from_millis(1000));
-	}
-
-	#[tokio::test]
-	async fn test_stream_message() {
-		init();
-
-		let incoming = r#"{
-			"stream": {
-				"id": 2611175,
-				"description": "stream description",
-				"title": "stream title",
-				"startedAt": "2022-11-05T14:02:24+00:00",
-				"room": "dc2-room-7dYNFuya8oYBRs1",
-				"thumbUrl": "https://stream1-dc2.onlyfans.com/img/dc2-room-7dYNFuya8oYBRs1/thumb.jpg",
-				"user": {
-					"avatar": "https://public.onlyfans.com/files/m/mk/mka/mkamcrf6rjmcwo0jj4zoavhmalzohe5a1640180203/avatar.jpg",
-					"id": 15585607,
-					"name": "OnlyFans",
-					"username": "onlyfans"
+			Event::MenuEvent { menu_id, .. } => {
+				if menu_id == quit_id {
+					info!("Closing application");
+					cancel_token.cancel();
+					MANAGER.wait().clear().expect("Cleared notifications");
+					*control_flow = ControlFlow::Exit;
+				} else if menu_id == clear_id {
+					MANAGER.wait().clear().expect("Cleared notifications");
 				}
-			}
-		}"#;
-
-		let msg = serde_json::from_str::<structs::MessageType>(incoming).unwrap();
-		assert!(matches!(
-			msg,
-			structs::MessageType::Tagged(structs::TaggedMessageType::Stream(_))
-		));
-
-		let params = get_auth_params().unwrap();
-		let client = OFClient::new().authorize(params).await.unwrap();
-		msg.handle_message(Some(&client)).await.unwrap();
-		sleep(Duration::from_millis(1000));
-	}
+			},
+			_ => {}
+		}
+	});
 }

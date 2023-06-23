@@ -1,21 +1,9 @@
-use crate::{client::{OFClient, Authorized, AuthedClient}, deserializers::str_to_date};
-
-use chrono::{DateTime, Utc};
-use filetime::{set_file_mtime, FileTime};
-use futures::future::join_all;
-use serde::Deserialize;
 use std::path::Path;
-
-#[derive(Deserialize, Debug)]
-struct CommonFilesInner {
-	url: Option<String>,
-}
-
-#[derive(Deserialize, Debug)]
-struct CommonFiles {
-	source: CommonFilesInner,
-	preview: CommonFilesInner,
-}
+use serde::Deserialize;
+use chrono::{DateTime, Utc};
+use futures::future::join_all;
+use filetime::{set_file_mtime, FileTime};
+use crate::{client::{OFClient, Authorized}, deserializers::str_to_date};
 
 #[derive(Deserialize, Debug)]
 #[serde(rename_all = "snake_case")]
@@ -26,47 +14,56 @@ pub enum MediaType {
 	Audio,
 }
 
-pub struct CommonMedia<'a> {
-	pub source: Option<&'a str>,
-	pub thumbnail: Option<&'a str>,
-}
-
 #[derive(Deserialize, Debug)]
 #[serde(rename_all = "camelCase")]
-pub struct Media {
+pub struct PostMedia {
 	id: u64,
+	#[serde(rename = "type")]
+	media_type: MediaType,
+	full: Option<String>,
+	preview: Option<String>,
 	can_view: bool,
 	#[serde(default = "Utc::now")]
 	#[serde(deserialize_with = "str_to_date")]
 	created_at: DateTime<Utc>,
-	#[serde(rename = "type")]
-	media_type: MediaType,
-}
-
-#[derive(Deserialize, Debug)]
-#[serde(rename_all = "camelCase")]
-pub struct PostMedia {
-	full: Option<String>,
-	preview: Option<String>,
-	#[serde(flatten)]
-	shared: Media,
 }
 
 #[derive(Deserialize, Debug)]
 #[serde(rename_all = "camelCase")]
 pub struct MessageMedia {
+	id: u64,
+	#[serde(rename = "type")]
+	media_type: MediaType,
 	src: Option<String>,
 	preview: Option<String>,
-	#[serde(flatten)]
-	shared: Media,
+	can_view: bool,
+	#[serde(default = "Utc::now")]
+	#[serde(deserialize_with = "str_to_date")]
+	created_at: DateTime<Utc>,
+}
+
+#[derive(Deserialize, Debug)]
+struct __Files {
+	url: Option<String>,
+}
+
+#[derive(Deserialize, Debug)]
+struct _Files {
+	source: __Files,
+	preview: __Files,
 }
 
 #[derive(Deserialize, Debug)]
 #[serde(rename_all = "camelCase")]
 pub struct StoryMedia {
-	files: CommonFiles,
-	#[serde(flatten)]
-	shared: Media,
+	id: u64,
+	#[serde(rename = "type")]
+	media_type: MediaType,
+	files: _Files,
+	can_view: bool,
+	#[serde(default = "Utc::now")]
+	#[serde(deserialize_with = "str_to_date")]
+	created_at: DateTime<Utc>,
 }
 
 // TODO: actually make use of this
@@ -77,71 +74,61 @@ pub struct StreamMedia {
 }
 
 pub trait ViewableMedia {
-	fn get(&self) -> CommonMedia;
+	fn source(&self) -> Option<&str>;
+	fn thumbnail(&self) -> Option<&str>;
 	fn media_type(&self) -> &MediaType;
 	fn unix_time(&self) -> i64;
 }
 
 impl ViewableMedia for PostMedia {
-	fn get(&self) -> CommonMedia {
-		CommonMedia {
-			source: self.full.as_deref(),
-			thumbnail: self.preview.as_deref(),
-		}
-	}
-
-	fn media_type(&self) -> &MediaType { &self.shared.media_type }
-	fn unix_time(&self) -> i64 { self.shared.created_at.timestamp() }
+	fn source(&self) -> Option<&str> { self.full.as_deref() }
+	fn thumbnail(&self) -> Option<&str> { self.preview.as_deref() }
+	fn media_type(&self) -> &MediaType { &self.media_type }
+	fn unix_time(&self) -> i64 { self.created_at.timestamp() }
 }
 
 impl ViewableMedia for MessageMedia {
-	fn get(&self) -> CommonMedia {
-		CommonMedia {
-			source: self.src.as_deref(),
-			thumbnail: self.preview.as_deref(),
-		}
-	}
-
-	fn media_type(&self) -> &MediaType { &self.shared.media_type }
-	fn unix_time(&self) -> i64 { self.shared.created_at.timestamp() }
+	fn source(&self) -> Option<&str> { self.src.as_deref() }
+	fn thumbnail(&self) -> Option<&str> { self.preview.as_deref() }
+	fn media_type(&self) -> &MediaType { &self.media_type }
+	fn unix_time(&self) -> i64 { self.created_at.timestamp() }
 }
 
 impl ViewableMedia for StoryMedia {
-	fn get(&self) -> CommonMedia {
-		CommonMedia {
-			source: self.files.source.url.as_deref(),
-			thumbnail: self.files.preview.url.as_deref(),
-		}
-	}
-
-	fn media_type(&self) -> &MediaType { &self.shared.media_type }
-	fn unix_time(&self) -> i64 { self.shared.created_at.timestamp() }
+	fn source(&self) -> Option<&str> { self.files.source.url.as_deref() }
+	fn thumbnail(&self) -> Option<&str> { self.files.preview.url.as_deref() }
+	fn media_type(&self) -> &MediaType { &self.media_type }
+	fn unix_time(&self) -> i64 { self.created_at.timestamp() }
 }
 
 impl ViewableMedia for StreamMedia {
-	fn get(&self) -> CommonMedia {
-		CommonMedia {
-			source: None,
-			thumbnail: None,
-		}
-	}
-
+	fn source(&self) -> Option<&str> { None }
+	fn thumbnail(&self) -> Option<&str> { None }
 	fn media_type(&self) -> &MediaType { &MediaType::Photo }
 	fn unix_time(&self) -> i64 { Utc::now().timestamp() }
 }
 
+pub struct CommonMedia<'a> {
+	pub source: Option<&'a str>,
+	pub thumbnail: Option<&'a str>,
+}
+
+impl<'a, M: ViewableMedia> From<&'a M> for CommonMedia<'a> {
+    fn from(value: &'a M) -> Self {
+        CommonMedia { source: value.source(), thumbnail: value.thumbnail() }
+    }
+}
+
 pub async fn download_media<T: ViewableMedia>(client: &OFClient<Authorized>, media: &[T], path: &Path) {
 	join_all(media.iter().filter_map(|media| {
-		media.get().source.map(|url| async move {
-			client.fetch_file(
-				url,
-				&path.join(match media.media_type() {
-					MediaType::Photo => "Images",
-					MediaType::Audio => "Audios",
-					MediaType::Video | MediaType::Gif => "Videos",
-				}),
-				None,
-			)
+		let type_str = match media.media_type() {
+			MediaType::Photo => "Images",
+			MediaType::Audio => "Audios",
+			MediaType::Video | MediaType::Gif => "Videos",
+		};
+
+		CommonMedia::from(media).source.map(|url| async move {
+			client.fetch_file(url, &path.join(type_str), None)
 			.await
 			.inspect_err(|err| error!("Download failed: {err}"))
 			.map(|(downloaded, path)| {

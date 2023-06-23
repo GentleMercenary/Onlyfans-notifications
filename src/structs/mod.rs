@@ -1,21 +1,18 @@
 pub mod content;
 pub mod media;
 
-use crate::client::{OFClient, Authorized, AuthedClient};
-use crate::deserializers::{notification_message, de_markdown_string};
 use crate::{MANAGER, SETTINGS, TEMPDIR};
+use crate::client::{OFClient, Authorized};
+use crate::deserializers::{notification_message, de_markdown_string};
 
+use reqwest::Url;
+use std::path::Path;
 use anyhow::{anyhow, bail};
-use content::{ContentType, MessageContent, NotificationContent, PostContent, StoryContent, StreamContent};
+use serde::{Deserialize, Serialize};
 use futures::future::{join, join_all};
 use media::{ViewableMedia, download_media};
-use reqwest::Url;
-use serde::{Deserialize, Serialize};
-use std::path::Path;
-use winrt_toast::{
-	content::image::{ImageHintCrop, ImagePlacement},
-	Header, Image, Toast,
-};
+use winrt_toast::{content::image::{ImageHintCrop, ImagePlacement}, Header, Image, Toast};
+use content::{Content, MessageContent, NotificationContent, StoryContent, StreamContent};
 
 #[derive(Serialize, Debug)]
 pub struct ConnectMessage<'a> {
@@ -24,9 +21,20 @@ pub struct ConnectMessage<'a> {
 }
 
 #[derive(Serialize, Debug)]
-pub struct GetOnlinesMessage {
+pub struct HeartbeatMessage {
 	pub act: &'static str,
 	pub ids: &'static [&'static u64],
+}
+
+impl Default for HeartbeatMessage {
+	fn default() -> Self {
+		HeartbeatMessage { act: "get_onlines", ids: &[] }
+	}
+}
+
+#[derive(Deserialize, Debug)]
+pub struct OnlinesMessage {
+	online: Vec<u64>
 }
 
 #[derive(Deserialize, Debug)]
@@ -113,29 +121,91 @@ pub enum TaggedMessageType {
 pub enum MessageType {
 	Tagged(TaggedMessageType),
 	Connected(ConnectedMessage),
+	Onlines(OnlinesMessage),
 	#[serde(deserialize_with = "notification_message")]
 	NewMessage(NotificationMessage),
 	Error(ErrorMessage),
 }
 
-fn get_thumbnail<T: ViewableMedia>(media: &[T]) -> Option<&str> {
-	media
-	.iter()
-	.find_map(|media| media.get().thumbnail.filter(|s| !s.is_empty()))
+impl MessageType {
+	pub async fn handle_message(self, client: &OFClient<Authorized>) -> anyhow::Result<()> {
+		return match self {
+			Self::Connected(msg) => {
+				info!("Connect message received: {:?}", msg);
+
+				let mut toast = Toast::new();
+				toast.text1("OF Notifier").text2("Connection established");
+
+				MANAGER.wait().show(&toast)?;
+				Ok(())
+			},
+			Self::Onlines(_) => Ok(()),
+			Self::Error(msg) => {
+				error!("Error message received: {:?}", msg);
+				bail!("websocket received error message with code {}", msg.error)
+			},
+			Self::NewMessage(msg) => {
+				info!("Notification message received: {:?}", msg);
+				handle(&msg.user, &msg.content, client).await
+			},
+			Self::Tagged(TaggedMessageType::PostPublished(msg)) => {
+				info!("Post message received: {:?}", msg);
+				let content = client.get_post(&msg.id).await?;
+
+				let handle = handle(&content.author, &content, client);
+				if SETTINGS.wait().should_like(&content.author.username) {
+					join(handle, client.like_post(&content)).await.0
+				} else {
+					handle.await
+				}
+			},
+			Self::Tagged(TaggedMessageType::Api2ChatMessage(msg)) => {
+				info!("Chat message received: {:?}", msg);
+
+				let handle = handle(&msg.from_user, &msg.content, client);
+				if SETTINGS.wait().should_like(&msg.from_user.username) {
+					join(handle, client.like_message(&msg.content)).await.0
+				} else {
+					handle.await
+				}
+			},
+			Self::Tagged(TaggedMessageType::Stories(msg)) => {
+				info!("Story message received: {:?}", msg);
+				join_all(msg.iter().map(|story| async move {				
+					let user = client.get_user(&story.user_id).await?;
+
+					let handle = handle(&user, &story.content, client);
+					if SETTINGS.wait().should_like(&user.username) {
+						join(handle, client.like_story(&story.content)).await.0
+					} else {
+						handle.await
+					}
+				}))
+				.await
+				.into_iter()
+				.find(Result::is_err)
+				.unwrap_or(Ok(()))
+			},
+			Self::Tagged(TaggedMessageType::Stream(msg)) => {
+				info!("Stream message received: {:?}", msg);
+				handle(&msg.user, &msg.content, client).await
+			}
+		};
+	}
 }
 
-async fn handle_content<T: ContentType>(content: &T, client: &OFClient<Authorized>, user: &User) -> anyhow::Result<()> {
-	let parsed = user.avatar.parse::<Url>()?;
-	let filename = parsed
-	.path_segments()
-	.and_then(|segments| {
-		let mut reverse_iter = segments.rev();
-		let ext = reverse_iter.next().and_then(|file| file.split('.').last());
-		let filename = reverse_iter.next();
+async fn create_notification<T: Content>(content: &T, client: &OFClient<Authorized>, user: &User) -> anyhow::Result<()> {
+	let avatar_url = user.avatar.parse::<Url>()?;
+	let avatar_filename = avatar_url
+		.path_segments()
+		.and_then(|segments| {
+			let mut reverse_iter = segments.rev();
+			let ext = reverse_iter.next().and_then(|file| file.split('.').last());
+			let filename = reverse_iter.next();
 
-		Option::zip(filename, ext).map(|(filename, ext)| [filename, ext].join("."))
-	})
-	.ok_or_else(|| anyhow!("Filename unknown"))?;
+			Option::zip(filename, ext).map(|(filename, ext)| [filename, ext].join("."))
+		})
+		.ok_or_else(|| anyhow!("Filename unknown"))?;
 
 	let mut user_path = Path::new("data").join(&user.username);
 	std::fs::create_dir_all(&user_path)?;
@@ -144,15 +214,14 @@ async fn handle_content<T: ContentType>(content: &T, client: &OFClient<Authorize
 	let (_, avatar) = client.fetch_file(
 			&user.avatar,
 			&user_path.join("Profile").join("Avatars"),
-			Some(&filename),
+			Some(&avatar_filename),
 		)
 		.await?;
 
-	let content_type = <T as ContentType>::get_type();
-	let mut toast: Toast = content.to_toast();
+	let header = <T as Content>::header();
+	let mut toast: Toast = content.toast();
 	toast
-	.header(Header::new(content_type, content_type, content_type))
-	.launch(user_path.to_str().unwrap())
+	.header(Header::new(header, header, ""))
 	.text1(&user.name)
 	.image(1,
 		Image::new_local(avatar)?
@@ -160,7 +229,14 @@ async fn handle_content<T: ContentType>(content: &T, client: &OFClient<Authorize
 		.with_placement(ImagePlacement::AppLogoOverride),
 	);
 
-	if let Some(thumb) = content.get_media().and_then(get_thumbnail) {
+	let thumb = content
+		.media()
+		.and_then(|media| {
+			media.iter()
+			.find_map(|media| media.thumbnail().filter(|s| !s.is_empty()))
+		});
+
+	if let Some(thumb) = thumb {
 		let (_, thumb) = client.fetch_file(thumb, TEMPDIR.wait().path(), None).await?;
 		toast.image(2, Image::new_local(thumb)?);
 	}
@@ -169,113 +245,231 @@ async fn handle_content<T: ContentType>(content: &T, client: &OFClient<Authorize
 	Ok(())
 }
 
-impl MessageType {
-	pub async fn handle_message(self, client: Option<&OFClient<Authorized>>) -> anyhow::Result<()> {
-		return match self {
-			Self::Connected(_) => {
-				info!("Connect message received");
-
-				let mut toast = Toast::new();
-				toast.text1("OF Notifier").text2("Connection established");
-
-				MANAGER.wait().show(&toast)?;
-				Ok(())
-			}
-			Self::Error(msg) => {
-				error!("Error message received: {:?}", msg);
-				bail!("websocket received error message with code {}", msg.error)
-			}
-			Self::NewMessage(msg) => {
-				msg.handle(client.unwrap()).await
-			}
-			Self::Tagged(tagged) => tagged.handle_message(client.unwrap()).await,
-		};
-	}
-}
-
-impl TaggedMessageType {
-	async fn handle_message(self, client: &OFClient<Authorized>) -> anyhow::Result<()> {
-		match self {
-			Self::PostPublished(msg) => msg.handle(client).await,
-			Self::Api2ChatMessage(msg) => msg.handle(client).await,
-			Self::Stories(msg) => {
-				join_all(msg.iter().map(|story| story.handle(client)))
-				.await
-				.into_iter()
-				.find(Result::is_err)
-				.unwrap_or(Ok(()))
-			}
-			Self::Stream(msg) => msg.handle(client).await,
-		}
-	}
-}
-
-async fn shared<T: ContentType + Send + Sync>(user: &User, content: &T, client: &OFClient<Authorized>) -> anyhow::Result<()> {
+async fn handle<T: Content + Send + Sync>(user: &User, content: &T, client: &OFClient<Authorized>) -> anyhow::Result<()> {
 	let settings = SETTINGS.wait();
 
 	let username = &user.username;
-	let notify = handle_content(content, client, user);
 	let path = Path::new("data")
 		.join(username)
-		.join(PostContent::get_type());
-	let download = content
-		.get_media()
-		.map(|media| download_media(client, media, &path));
+		.join(<T as Content>::header());
 
-	if let Some(download) = download && settings.should_download(username) {
-		if settings.should_notify(username) {
-			return join(notify, download).await.0
-		} 
-
-		download.await;
-	} else if settings.should_notify(username) {
-		return notify.await
-	}
-
-	Ok(())
+	let notify = settings
+		.should_notify(username)
+		.then(|| {
+			create_notification(content, client, user)
+		});
+	
+	let download = settings
+		.should_download(username)
+		.then(|| {
+			content
+			.media()
+			.map(|media| download_media(client, media, &path))
+		}).flatten();
+	
+	return match (notify, download) {
+		(Some(notify), Some(download)) => join(notify, download).await.0,
+		(Some(notify), None) => notify.await,
+		(None, Some(download)) => Ok(download.await),
+		_ => Ok(())
+	};
 }
 
-impl PostPublishedMessage {
-	pub async fn handle(&self, client: &OFClient<Authorized>) -> anyhow::Result<()> {
-		info!("Post message received: {:?}", self);
-		let settings = SETTINGS.wait();
-		
-		let content = client.fetch_post(&self.id).await?;
-		if settings.should_like(&content.author.username) {
-			let (a, b) = join(client.like_post(&content), shared(&content.author, &content, client)).await;
-			a.and(b)
-		} else {
-			shared(&content.author, &content, client).await
-		}
+#[cfg(test)]
+mod tests {
+	use super::*;
+	use crate::{get_auth_params, structs, settings::{Settings, self}, init};
+
+	use std::sync::Once;
+	use std::thread::sleep;
+	use log::LevelFilter;
+	use settings::Whitelist;
+	use simplelog::{TermLogger, TerminalMode, Config, ColorChoice};
+	use std::time::Duration;
+
+	static INIT: Once = Once::new();
+
+	fn test_init() {
+		INIT.call_once(|| {
+			init();
+
+			SETTINGS
+			.set(Settings {
+				notify: Whitelist::Full(true),
+				download: Whitelist::Full(true),
+				like: Whitelist::Full(false)
+			})
+			.unwrap();
+	
+			TermLogger::init(
+				LevelFilter::Debug,
+				Config::default(),
+				TerminalMode::Mixed,
+				ColorChoice::Auto,
+			)
+			.unwrap();
+		});
 	}
-}
 
-impl ChatMessage {
-	pub async fn handle(&self, client: &OFClient<Authorized>) -> anyhow::Result<()> {
-		info!("Chat message received: {:?}", self);
-		shared(&self.from_user, &self.content, client).await
+	#[tokio::test]
+	async fn test_chat_message() {
+		test_init();
+
+		let incoming = r#"{
+			"api2_chat_message": {
+				"id": 0,
+				"text": "This is a message<br />\n to test <a href = \"/onlyfans\">MARKDOWN parsing</a> 👌<br />\n in notifications 💯",
+				"price": 3.99,
+				"fromUser": {
+					"avatar": "https://public.onlyfans.com/files/m/mk/mka/mkamcrf6rjmcwo0jj4zoavhmalzohe5a1640180203/avatar.jpg",
+					"id": 15585607,
+					"name": "OnlyFans",
+					"username": "onlyfans"
+				},
+				"media": [
+					{
+						"id": 0,
+						"canView": true,
+						"src": "https://raw.githubusercontent.com/allenbenz/winrt-notification/main/resources/test/chick.jpeg",
+						"preview": "https://raw.githubusercontent.com/allenbenz/winrt-notification/main/resources/test/flower.jpeg",
+						"type": "photo"
+					}
+				]
+			}
+		}"#;
+
+		let msg = serde_json::from_str::<structs::MessageType>(incoming).unwrap();
+		assert!(matches!(msg, structs::MessageType::Tagged(structs::TaggedMessageType::Api2ChatMessage(_))));
+
+		let params = get_auth_params().unwrap();
+		let client = OFClient::new().authorize(params).await.unwrap();
+		msg.handle_message(&client).await.unwrap();
+		sleep(Duration::from_millis(1000));
 	}
-}
 
-impl StoryMessage {
-	pub async fn handle(&self, client: &OFClient<Authorized>) -> anyhow::Result<()> {
-		info!("Story message received: {:?}", self);
+	#[tokio::test]
+	async fn test_post_message() {
+		init();
 
-		let user = client.fetch_user(&self.user_id).await?;
-		shared(&user, &self.content, client).await
+		// Onlyfan april fools post
+		let incoming = r#"{
+			"post_published": {
+				"id": "129720708",
+				"user_id" : "15585607",
+				"show_posts_in_feed":true
+			}
+		}"#;
+
+		let msg = serde_json::from_str::<structs::MessageType>(incoming).unwrap();
+		assert!(matches!(msg, structs::MessageType::Tagged(structs::TaggedMessageType::PostPublished(_))));
+
+		let params = get_auth_params().unwrap();
+		let client = OFClient::new().authorize(params).await.unwrap();
+		msg.handle_message(&client).await.unwrap();
+		sleep(Duration::from_millis(1000));
 	}
-}
 
-impl NotificationMessage {
-	pub async fn handle(&self, client: &OFClient<Authorized>) -> anyhow::Result<()> {
-		info!("Notification message received: {:?}", self);
-		shared(&self.user, &self.content, client).await
+	#[tokio::test]
+	async fn test_story_message() {
+		test_init();
+
+		let incoming = r#"{
+			"stories": [
+				{
+					"id": 0,
+					"userId": 15585607,
+					"media":[
+						{
+							"id": 0,
+							"canView": true,
+							"files": {
+								"source": {
+									"url": "https://raw.githubusercontent.com/allenbenz/winrt-notification/main/resources/test/chick.jpeg"
+								},
+								"preview": {
+									"url": "https://raw.githubusercontent.com/allenbenz/winrt-notification/main/resources/test/flower.jpeg"
+								}
+							},
+							"type": "photo"
+						}
+					]
+				}
+			]
+		}"#;
+
+		let msg = serde_json::from_str::<structs::MessageType>(incoming).unwrap();
+		assert!(matches!(msg, structs::MessageType::Tagged(structs::TaggedMessageType::Stories(_))));
+
+		let params = get_auth_params().unwrap();
+		let client = OFClient::new().authorize(params).await.unwrap();
+		msg.handle_message(&client).await.unwrap();
+		sleep(Duration::from_millis(1000));
 	}
-}
 
-impl StreamMessage {
-	pub async fn handle(&self, client: &OFClient<Authorized>) -> anyhow::Result<()> {
-		info!("Stream message received: {:?}", self);
-		shared(&self.user, &self.content, client).await
+	
+	#[tokio::test]
+	async fn test_notification_message() {
+		test_init();
+
+		let incoming = r#"{
+			"new_message":{
+			   "id":"0",
+			   "type":"message",
+			   "text":"is currently running a promotion, <a href=\"https://onlyfans.com/onlyfans\">check it out</a>",
+			   "subType":"promoreg_for_expired",
+			   "user_id":"274000171",
+			   "isRead":false,
+			   "canGoToProfile":true,
+			   "newPrice":null,
+			   "user":{
+					"avatar": "https://public.onlyfans.com/files/m/mk/mka/mkamcrf6rjmcwo0jj4zoavhmalzohe5a1640180203/avatar.jpg",
+					"id": 15585607,
+					"name": "OnlyFans",
+					"username": "onlyfans"
+				}
+			},
+			"hasSystemNotifications": false
+		 }"#;
+
+		let msg = serde_json::from_str::<structs::MessageType>(incoming).unwrap();
+		assert!(matches!(msg, structs::MessageType::NewMessage(_)));
+
+		let params = get_auth_params().unwrap();
+		let client = OFClient::new().authorize(params).await.unwrap();
+		msg.handle_message(&client).await.unwrap();
+		sleep(Duration::from_millis(1000));
+	}
+
+	#[tokio::test]
+	async fn test_stream_message() {
+		test_init();
+
+		let incoming = r#"{
+			"stream": {
+				"id": 2611175,
+				"description": "stream description",
+				"title": "stream title",
+				"startedAt": "2022-11-05T14:02:24+00:00",
+				"room": "dc2-room-7dYNFuya8oYBRs1",
+				"thumbUrl": "https://stream1-dc2.onlyfans.com/img/dc2-room-7dYNFuya8oYBRs1/thumb.jpg",
+				"user": {
+					"avatar": "https://public.onlyfans.com/files/m/mk/mka/mkamcrf6rjmcwo0jj4zoavhmalzohe5a1640180203/avatar.jpg",
+					"id": 15585607,
+					"name": "OnlyFans",
+					"username": "onlyfans"
+				}
+			}
+		}"#;
+
+		let msg = serde_json::from_str::<structs::MessageType>(incoming).unwrap();
+		assert!(matches!(
+			msg,
+			structs::MessageType::Tagged(structs::TaggedMessageType::Stream(_))
+		));
+
+		let params = get_auth_params().unwrap();
+		let client = OFClient::new().authorize(params).await.unwrap();
+		msg.handle_message(&client).await.unwrap();
+		sleep(Duration::from_millis(1000));
 	}
 }

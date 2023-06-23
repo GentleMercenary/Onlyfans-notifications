@@ -1,48 +1,48 @@
-use super::User;
-use super::media::{MessageMedia, PostMedia, StoryMedia, StreamMedia, ViewableMedia};
 use crate::deserializers::{de_markdown_string, str_to_date};
 
-use chrono::{DateTime, Utc};
-use serde::Deserialize;
+use super::User;
+use super::media::{MessageMedia, PostMedia, StoryMedia, StreamMedia, ViewableMedia};
+
 use std::slice;
+use serde::Deserialize;
+use chrono::{DateTime, Utc};
 use winrt_toast::{content::text::TextPlacement, Text, Toast};
 
 #[derive(Deserialize, Debug)]
 #[serde(rename_all = "camelCase")]
-pub struct Content<T: ViewableMedia> {
-	pub id: u64,
-	#[serde(default = "Utc::now")]
-	#[serde(deserialize_with = "str_to_date")]
-	posted_at: DateTime<Utc>,
-	media: Vec<T>,
-}
-
-#[derive(Deserialize, Debug)]
-#[serde(rename_all = "camelCase")]
 pub struct PostContent {
+	pub id: u64,
 	#[serde(deserialize_with = "de_markdown_string")]
 	raw_text: String,
 	price: Option<f32>,
 	pub author: User,
-	#[serde(flatten)]
-	pub shared: Content<PostMedia>,
+	#[serde(default = "Utc::now")]
+	#[serde(deserialize_with = "str_to_date")]
+	posted_at: DateTime<Utc>,
+	media: Vec<PostMedia>,
 }
 
 #[derive(Deserialize, Debug)]
 #[serde(rename_all = "camelCase")]
 pub struct MessageContent {
+	pub id: u64,
 	#[serde(deserialize_with = "de_markdown_string")]
 	text: String,
 	price: Option<f32>,
-	#[serde(flatten)]
-	shared: Content<MessageMedia>,
+	#[serde(default = "Utc::now")]
+	#[serde(deserialize_with = "str_to_date")]
+	posted_at: DateTime<Utc>,
+	media: Vec<MessageMedia>,
 }
 
 #[derive(Deserialize, Debug)]
 #[serde(rename_all = "camelCase")]
 pub struct StoryContent {
-	#[serde(flatten)]
-	shared: Content<StoryMedia>,
+	pub id: u64,
+	#[serde(default = "Utc::now")]
+	#[serde(deserialize_with = "str_to_date")]
+	posted_at: DateTime<Utc>,
+	media: Vec<StoryMedia>,
 }
 
 #[derive(Deserialize, Debug)]
@@ -69,99 +69,89 @@ pub struct StreamContent {
 	media: StreamMedia,
 }
 
-pub trait ContentType {
+pub trait Content {
 	type Media: ViewableMedia + Sync + Send;
 
-	fn get_type() -> &'static str;
-	fn get_media(&self) -> Option<&[Self::Media]>;
-	fn to_toast(&self) -> Toast;
+	fn header() -> &'static str;
+	fn media(&self) -> Option<&[Self::Media]>;
+	fn toast(&self) -> Toast;
 }
 
-impl ContentType for PostContent {
+impl Content for PostContent {
 	type Media = PostMedia;
 
-	fn get_type() -> &'static str { "Posts" }
+	fn header() -> &'static str { "Posts" }
+	fn media(&self) -> Option<&[Self::Media]> { Some(&self.media) }
 
-	fn to_toast(&self) -> Toast {
+	fn toast(&self) -> Toast {
 		let mut toast = Toast::new();
 		toast.text2(&self.raw_text);
 
 		if let Some(price) = self.price && price > 0f32 {
-			toast.text3(Text::new(format!("${price:.2}"))
-				.with_placement(TextPlacement::Attribution));
+			toast
+			.text3(Text::new(format!("${price:.2}"))
+			.with_placement(TextPlacement::Attribution));
 		}
 
 		toast
 	}
-
-	fn get_media(&self) -> Option<&[Self::Media]> { Some(&self.shared.media) }
 }
 
-impl ContentType for MessageContent {
+impl Content for MessageContent {
 	type Media = MessageMedia;
 
-	fn get_type() -> &'static str { "Messages" }
+	fn header() -> &'static str { "Messages" }
+	fn media(&self) -> Option<&[Self::Media]> { Some(&self.media) }
 
-	fn to_toast(&self) -> Toast {
+	fn toast(&self) -> Toast {
 		let mut toast = Toast::new();
 		toast.text2(&self.text);
 
 		if let Some(price) = self.price && price > 0f32 {
-			toast.text3(Text::new(format!("${price:.2}"))
-				.with_placement(TextPlacement::Attribution));
+			toast
+			.text3(Text::new(format!("${price:.2}"))
+			.with_placement(TextPlacement::Attribution));
 		}
 
 		toast
 	}
-
-	fn get_media(&self) -> Option<&[Self::Media]> { Some(&self.shared.media) }
 }
 
-impl ContentType for StoryContent {
+impl Content for StoryContent {
 	type Media = StoryMedia;
 
-	fn get_type() -> &'static str { "Stories" }
-
-	fn to_toast(&self) -> Toast {
-		Toast::new()
-	}
-
-	fn get_media(&self) -> Option<&[Self::Media]> { Some(&self.shared.media) }
+	fn header() -> &'static str { "Stories" }
+	fn media(&self) -> Option<&[Self::Media]> { Some(&self.media) }
+	fn toast(&self) -> Toast { Toast::new() }
 }
 
-impl ContentType for NotificationContent {
+impl Content for NotificationContent {
 	type Media = PostMedia;
 
-	fn get_type() -> &'static str { "Notification" }
+	fn header() -> &'static str { "Notifications" }
+	fn media(&self) -> Option<&[Self::Media]> { None }
 	
-	fn to_toast(&self) -> Toast {
+	fn toast(&self) -> Toast {
 		let mut toast = Toast::new();
 		toast.text2(&self.text);
 		
 		toast
 	}
-
-	fn get_media(&self) -> Option<&[Self::Media]> { None }
 }
 
-impl ContentType for StreamContent {
+impl Content for StreamContent {
 	type Media = StreamMedia;
 
-	fn get_type() -> &'static str { "Stream" }
+	fn header() -> &'static str { "Streams" }
+	fn media(&self) -> Option<&[Self::Media]> { Some(slice::from_ref(&self.media)) }
 
-	fn to_toast(&self) -> Toast {
+	fn toast(&self) -> Toast {
 		let mut toast = Toast::new();
-		
-		if !self.title.is_empty() {
-			toast.text2(&self.title);
-		}
-		
-		if !self.description.is_empty() {
-			toast.text3(&self.description);
-		}
+
+		toast
+		.text2(&self.title)
+		.text3(&self.description);
 
 		toast
 	}
-
-	fn get_media(&self) -> Option<&[Self::Media]> { Some(slice::from_ref(&self.media)) }
 }
