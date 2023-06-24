@@ -16,7 +16,7 @@ pub enum MediaType {
 
 #[derive(Deserialize, Debug)]
 #[serde(rename_all = "camelCase")]
-pub struct PostMedia {
+pub struct Post {
 	id: u64,
 	#[serde(rename = "type")]
 	media_type: MediaType,
@@ -30,7 +30,7 @@ pub struct PostMedia {
 
 #[derive(Deserialize, Debug)]
 #[serde(rename_all = "camelCase")]
-pub struct MessageMedia {
+pub struct Message {
 	id: u64,
 	#[serde(rename = "type")]
 	media_type: MediaType,
@@ -55,7 +55,7 @@ struct _Files {
 
 #[derive(Deserialize, Debug)]
 #[serde(rename_all = "camelCase")]
-pub struct StoryMedia {
+pub struct Story {
 	id: u64,
 	#[serde(rename = "type")]
 	media_type: MediaType,
@@ -69,57 +69,57 @@ pub struct StoryMedia {
 // TODO: actually make use of this
 #[derive(Deserialize, Debug)]
 #[serde(rename_all = "camelCase")]
-pub struct StreamMedia {
+pub struct Stream {
 	thumb_url: String,
 }
 
-pub trait ViewableMedia {
+pub trait Media {
 	fn source(&self) -> Option<&str>;
 	fn thumbnail(&self) -> Option<&str>;
 	fn media_type(&self) -> &MediaType;
 	fn unix_time(&self) -> i64;
 }
 
-impl ViewableMedia for PostMedia {
+impl Media for Post {
 	fn source(&self) -> Option<&str> { self.full.as_deref() }
 	fn thumbnail(&self) -> Option<&str> { self.preview.as_deref() }
 	fn media_type(&self) -> &MediaType { &self.media_type }
 	fn unix_time(&self) -> i64 { self.created_at.timestamp() }
 }
 
-impl ViewableMedia for MessageMedia {
+impl Media for Message {
 	fn source(&self) -> Option<&str> { self.src.as_deref() }
 	fn thumbnail(&self) -> Option<&str> { self.preview.as_deref() }
 	fn media_type(&self) -> &MediaType { &self.media_type }
 	fn unix_time(&self) -> i64 { self.created_at.timestamp() }
 }
 
-impl ViewableMedia for StoryMedia {
+impl Media for Story {
 	fn source(&self) -> Option<&str> { self.files.source.url.as_deref() }
 	fn thumbnail(&self) -> Option<&str> { self.files.preview.url.as_deref() }
 	fn media_type(&self) -> &MediaType { &self.media_type }
 	fn unix_time(&self) -> i64 { self.created_at.timestamp() }
 }
 
-impl ViewableMedia for StreamMedia {
+impl Media for Stream {
 	fn source(&self) -> Option<&str> { None }
 	fn thumbnail(&self) -> Option<&str> { None }
 	fn media_type(&self) -> &MediaType { &MediaType::Photo }
 	fn unix_time(&self) -> i64 { Utc::now().timestamp() }
 }
 
-pub struct CommonMedia<'a> {
-	pub source: Option<&'a str>,
-	pub thumbnail: Option<&'a str>,
+struct CommonMedia<'a> {
+	source: Option<&'a str>,
+	thumbnail: Option<&'a str>,
 }
 
-impl<'a, M: ViewableMedia> From<&'a M> for CommonMedia<'a> {
-    fn from(value: &'a M) -> Self {
-        CommonMedia { source: value.source(), thumbnail: value.thumbnail() }
-    }
+impl<'a, M: Media> From<&'a M> for CommonMedia<'a> {
+	fn from(value: &'a M) -> Self {
+		CommonMedia { source: value.source(), thumbnail: value.thumbnail() }
+	}
 }
 
-pub async fn download_media<T: ViewableMedia>(client: &OFClient<Authorized>, media: &[T], path: &Path) {
+pub async fn download_media<T: Media>(client: &OFClient<Authorized>, media: &[T], path: &Path) {
 	join_all(media.iter().filter_map(|media| {
 		let type_str = match media.media_type() {
 			MediaType::Photo => "Images",

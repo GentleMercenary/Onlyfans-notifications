@@ -36,3 +36,13 @@ impl Settings {
 		}
 	}
 }
+
+impl Default for Settings {
+	fn default() -> Self {
+		Settings {
+			notify: Whitelist::Full(true),
+			download: Whitelist::Full(true),
+			like: Whitelist::Full(true)
+		}
+	}
+}

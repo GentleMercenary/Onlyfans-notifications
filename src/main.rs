@@ -11,6 +11,8 @@ mod deserializers;
 extern crate log;
 extern crate simplelog;
 
+use crate::structs::user;
+
 use tokio::select;
 use chrono::Local;
 mod websocket_client;
@@ -27,13 +29,14 @@ use std::{fs::{self, File}, path::Path, sync::Arc, io::{Error, ErrorKind}};
 use simplelog::{Config, LevelFilter, WriteLogger, TermLogger,TerminalMode, CombinedLogger, ColorChoice};
 use tao::{event_loop::{EventLoop, ControlFlow, EventLoopProxy}, window::Icon, system_tray::SystemTrayBuilder, menu::{ContextMenu, MenuItemAttributes}, event::{Event, TrayEvent}};
 
+
 static MANAGER: OnceCell<ToastManager> = OnceCell::new();
 static SETTINGS: OnceCell<Settings> = OnceCell::new();
 static TEMPDIR: OnceCell<TempDir> = OnceCell::new();
 
 fn init() {
 	let aum_id = "OFNotifier";
-	let icon_path = Path::new("icons").join("icon.png").canonicalize().expect("Found icon file");
+	let icon_path = Path::new("icons").join("icon.ico").canonicalize().expect("Found icon file");
 	register(aum_id, "OF notifier", Some(icon_path.as_path())).expect("Registered application");
 	
 	MANAGER
@@ -59,27 +62,22 @@ fn get_auth_params() -> anyhow::Result<AuthParams> {
 }
 
 async fn make_connection(proxy: EventLoopProxy<Events>, cancel_token: Arc<CancellationToken>) {
-	let auth_link: &str = "https://onlyfans.com/api2/v2/users/me";
 	info!("Fetching authentication parameters");
 
 	let cloned_proxy = proxy.clone();
-
 	futures::future::ready(get_auth_params())
 	.and_then(|params| OFClient::new().authorize(params))
 	.and_then(|client| async move {
-		let response = client.get(auth_link).await?;
-		Ok((client, response))
-	}).and_then(|(client, response)| async move {
-		let text = response.text().await?;
-		Ok((client, text))
-	}).and_then(|(client, response)| async move {
-		info!("Successful fetch for authentication parameters");
+		info!("Authorization successful");
+
+		let me = client.get("https://onlyfans.com/api2/v2/users/me")
+			.and_then(|response| response.json::<user::Me>().map_err(Into::into))
+			.await?;
 		
-		let init_msg: structs::InitMessage = serde_json::from_str(&response)?;
-		debug!("{:?}", init_msg);
-		info!("Connecting as {}", init_msg.name);
+		debug!("{:?}", me);
+		info!("Connecting as {}", me.name);
 		let mut socket = websocket_client::WebSocketClient::new()
-			.connect(init_msg.ws_auth_token, &client).await?;
+			.connect(&me.ws_auth_token, &client).await?;
 
 		cloned_proxy.send_event(Events::Connected)?;
 		let res = select! {
@@ -96,9 +94,9 @@ async fn make_connection(proxy: EventLoopProxy<Events>, cancel_token: Arc<Cancel
 
 		let mut toast = Toast::new();
 		toast
-			.text1("OF Notifier")
-			.text2("An error occurred, disconnecting")
-			.duration(ToastDuration::Long);
+		.text1("OF Notifier")
+		.text2("An error occurred, disconnecting")
+		.duration(ToastDuration::Long);
 
 		MANAGER.wait().show(&toast).expect("Showed error notification");
 	})
@@ -142,7 +140,7 @@ async fn main() -> anyhow::Result<()> {
 	let event_loop = EventLoop::<Events>::with_user_event();
 	let proxy = event_loop.create_proxy();
 
-	let first_icon = ImageReader::open(Path::new("icons").join("icon.png"))
+	let first_icon = ImageReader::open(Path::new("icons").join("icon.ico"))
 	.map_err(<anyhow::Error>::from)
 	.and_then(|reader| reader.decode().map_err(<anyhow::Error>::from))
 	.and_then(|image| {
@@ -152,7 +150,7 @@ async fn main() -> anyhow::Result<()> {
 		.map_err(<anyhow::Error>::from)
 	})?;
 
-	let second_icon = ImageReader::open(Path::new("icons").join("icon2.png"))
+	let second_icon = ImageReader::open(Path::new("icons").join("icon2.ico"))
 	.map_err(<anyhow::Error>::from)
 	.and_then(|reader| reader.decode().map_err(<anyhow::Error>::from))
 	.and_then(|image| {
@@ -163,8 +161,6 @@ async fn main() -> anyhow::Result<()> {
 	})?;
 
 	let mut tray_menu = ContextMenu::new();
-	tray_menu.add_item(MenuItemAttributes::new("OF Notifier"))
-	.set_enabled(false);
 
 	let quit_id = tray_menu.add_item(MenuItemAttributes::new("Quit")).id();
 	let clear_id = tray_menu.add_item(MenuItemAttributes::new("Clear notifications")).id();

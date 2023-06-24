@@ -1,6 +1,4 @@
 use crate::deserializers::{parse_cookie, non_empty_string};
-use crate::structs::content::{StoryContent, MessageContent};
-use crate::structs::{User, content::PostContent};
 
 use serde::Deserialize;
 use cached::proc_macro::once;
@@ -9,7 +7,7 @@ use futures::{StreamExt, TryFutureExt};
 use crypto::{digest::Digest, sha1::Sha1};
 use tokio_retry::{strategy::FixedInterval, Retry};
 use reqwest::{cookie::Jar, header, Client, Response, Url};
-use std::{fmt, fs::{self, File}, io::Write, path::{Path, PathBuf}, sync::Arc, time::{SystemTime, UNIX_EPOCH}};
+use std::{fs::{self, File}, io::Write, path::{Path, PathBuf}, sync::Arc, time::{SystemTime, UNIX_EPOCH}};
 
 #[derive(Debug)]
 pub struct Cookie {
@@ -179,48 +177,6 @@ impl OFClient<Authorized> {
 
 		Retry::spawn(FixedInterval::from_millis(1000).take(5), ipost).await
 	}
-
-	pub async fn get_user(&self, user_id: &(impl fmt::Display + std::marker::Sync)) -> anyhow::Result<User> {
-		self.get(&format!("https://onlyfans.com/api2/v2/users/{user_id}"))
-		.and_then(|response| response.json::<User>().map_err(Into::into))
-		.await
-		.inspect(|user| info!("Got user: {:?}", user))
-		.inspect_err(|err| error!("Error reading user {user_id}: {err:?}"))
-	}
-
-	pub async fn get_post(&self, post_id: &(impl fmt::Display + std::marker::Sync)) -> anyhow::Result<PostContent> {
-		self.get(&format!("https://onlyfans.com/api2/v2/posts/{post_id}"))
-		.and_then(|response| response.json::<PostContent>().map_err(Into::into))
-		.await
-		.inspect(|content| info!("Got content: {:?}", content))
-		.inspect_err(|err| error!("Error reading content {post_id}: {err:?}"))
-	}
-
-	pub async fn like_post(&self, post: &PostContent) -> anyhow::Result<()> {
-		let user_id = post.author.id;
-		let post_id = post.id;
-
-		self.post(&format!("https://onlyfans.com/api2/v2/posts/{post_id}/favorites/{user_id}"))
-		.await
-		.map(|_| ())
-	}
-	
-	pub async fn like_message(&self, message: &MessageContent) -> anyhow::Result<()> {
-		let message_id = message.id;
-
-		self.post(&format!("https://onlyfans.com/api2/v2/messages/{message_id}/like"))
-		.await
-		.map(|_| ())
-	}
-
-	pub async fn like_story(&self, story: &StoryContent) -> anyhow::Result<()> {
-		let story_id = story.id;
-
-		self.post(&format!("https://onlyfans.com/api2/v2/stories/{story_id}/like"))
-		.await
-		.map(|_| ())
-	}
-
 
 	pub async fn fetch_file(&self, url: &str, path: &Path, filename: Option<&str>) -> anyhow::Result<(bool, PathBuf)> {
 		let parsed_url: Url = url.parse()?;

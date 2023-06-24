@@ -1,22 +1,23 @@
+use crate::{client::{OFClient, Authorized}, structs::socket};
+
 use anyhow::bail;
 use std::time::Duration;
 use futures::TryFutureExt;
-use futures_util::{SinkExt, StreamExt, stream::{SplitStream, SplitSink}};
 use tokio::{net::TcpStream, time::timeout};
-use crate::{structs::{self, MessageType}, client::{OFClient, Authorized}};
+use futures_util::{SinkExt, StreamExt, stream::{SplitStream, SplitSink}};
 use tokio_tungstenite::{connect_async, MaybeTlsStream, WebSocketStream, tungstenite::Message};
 
-impl TryFrom<Message> for MessageType {
-    type Error = anyhow::Error;
+impl TryFrom<Message> for socket::Message {
+	type Error = anyhow::Error;
 
-    fn try_from(value: Message) -> Result<Self, <MessageType as TryFrom<Message>>::Error> {
-        let s = value.to_text()?;
+	fn try_from(value: Message) -> Result<Self, <socket::Message as TryFrom<Message>>::Error> {
+		let s = value.to_text()?;
 		if !s.starts_with("{\"online\":[") { debug!("Received message: {s}") };
 
-		serde_json::from_str::<structs::MessageType>(s)
+		serde_json::from_str::<socket::Message>(s)
 		.inspect_err(|err| warn!("Message could not be parsed: {s}, reason: {err}"))
 		.map_err(Into::into)
-    }
+	}
 }
 
 pub struct Disconnected;
@@ -49,14 +50,14 @@ impl WebSocketClient<Disconnected> {
 
 		info!("Sending connect message");
 		connected_client.connection.sink
-		.send(serde_json::to_vec(&structs::ConnectMessage { act: "connect", token })?.into())
+		.send(serde_json::to_vec(&socket::Connect { act: "connect", token })?.into())
 		.await?;
 
 		connected_client
 		.wait_for_message(Duration::from_secs(10))
 		.and_then(|msg| async move {
 			match msg {
-				Some(msg @ structs::MessageType::Connected(_)) => msg.handle_message(client).await,
+				Some(msg @ socket::Message::Connected(_)) => msg.handle_message(client).await,
 				_ => bail!("Unexpected response to connect request: {:?}", msg)
 			}
 		}).await?;
@@ -86,8 +87,8 @@ impl WebSocketClient<Connected> {
 				msg = self.wait_for_message(if heartbeat_flight { Duration::from_secs(5) } else { Duration::MAX }) => {
 					match msg {
 						Ok(Some(msg)) => {
-							if let structs::MessageType::Onlines(_) = msg {
-								debug!("Heartbeat acknowledged");
+							if let socket::Message::Onlines(_) = msg {
+								debug!("Heartbeat acknowledged: {msg:?}");
 								heartbeat_flight = false;
 							}
 							msg.handle_message(&client).await?;
@@ -101,14 +102,16 @@ impl WebSocketClient<Connected> {
 	}
 
 	async fn send_heartbeat(&mut self) -> anyhow::Result<()> {
-		debug!("Sending heartbeat");
+		let heartbeat = socket::Heartbeat::default();
+
+		debug!("Sending heartbeat: {heartbeat:?}");
 		self.connection.sink
-		.send(Message::Binary(serde_json::to_vec(&structs::HeartbeatMessage::default())?))
+		.send(Message::Binary(serde_json::to_vec(&heartbeat)?))
 		.await
 		.map_err(Into::into)
 	}
 
-	async fn wait_for_message(&mut self, duration: Duration) -> anyhow::Result<Option<structs::MessageType>> {
+	async fn wait_for_message(&mut self, duration: Duration) -> anyhow::Result<Option<socket::Message>> {
 		match timeout(duration, self.connection.stream.next()).await {
 			Err(_) => bail!("Timeout expired"),
 			Ok(None) => bail!("Message queue exhausted"),

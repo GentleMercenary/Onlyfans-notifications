@@ -1,16 +1,16 @@
-use crate::deserializers::{de_markdown_string, str_to_date};
+use crate::{deserializers::{de_markdown_string, str_to_date}, client::{OFClient, Authorized}};
 
-use super::User;
-use super::media::{MessageMedia, PostMedia, StoryMedia, StreamMedia, ViewableMedia};
+use super::{media, user::User};
 
-use std::slice;
+use std::{slice, fmt};
+use futures_util::TryFutureExt;
 use serde::Deserialize;
 use chrono::{DateTime, Utc};
 use winrt_toast::{content::text::TextPlacement, Text, Toast};
 
 #[derive(Deserialize, Debug)]
 #[serde(rename_all = "camelCase")]
-pub struct PostContent {
+pub struct Post {
 	pub id: u64,
 	#[serde(deserialize_with = "de_markdown_string")]
 	raw_text: String,
@@ -19,12 +19,12 @@ pub struct PostContent {
 	#[serde(default = "Utc::now")]
 	#[serde(deserialize_with = "str_to_date")]
 	posted_at: DateTime<Utc>,
-	media: Vec<PostMedia>,
+	media: Vec<media::Post>,
 }
 
 #[derive(Deserialize, Debug)]
 #[serde(rename_all = "camelCase")]
-pub struct MessageContent {
+pub struct Message {
 	pub id: u64,
 	#[serde(deserialize_with = "de_markdown_string")]
 	text: String,
@@ -32,22 +32,22 @@ pub struct MessageContent {
 	#[serde(default = "Utc::now")]
 	#[serde(deserialize_with = "str_to_date")]
 	posted_at: DateTime<Utc>,
-	media: Vec<MessageMedia>,
+	media: Vec<media::Message>,
 }
 
 #[derive(Deserialize, Debug)]
 #[serde(rename_all = "camelCase")]
-pub struct StoryContent {
+pub struct Story {
 	pub id: u64,
 	#[serde(default = "Utc::now")]
 	#[serde(deserialize_with = "str_to_date")]
 	posted_at: DateTime<Utc>,
-	media: Vec<StoryMedia>,
+	media: Vec<media::Story>,
 }
 
 #[derive(Deserialize, Debug)]
 #[serde(rename_all = "camelCase")]
-pub struct NotificationContent {
+pub struct Notification {
 	id: String,
 	#[serde(deserialize_with = "de_markdown_string")]
 	text: String,
@@ -55,7 +55,7 @@ pub struct NotificationContent {
 
 #[derive(Deserialize, Debug)]
 #[serde(rename_all = "camelCase")]
-pub struct StreamContent {
+pub struct Stream {
 	id: u64,
 	#[serde(deserialize_with = "de_markdown_string")]
 	description: String,
@@ -66,19 +66,19 @@ pub struct StreamContent {
 	#[serde(deserialize_with = "str_to_date")]
 	started_at: DateTime<Utc>,
 	#[serde(flatten)]
-	media: StreamMedia,
+	media: media::Stream,
 }
 
 pub trait Content {
-	type Media: ViewableMedia + Sync + Send;
+	type Media: media::Media + Sync + Send;
 
 	fn header() -> &'static str;
 	fn media(&self) -> Option<&[Self::Media]>;
 	fn toast(&self) -> Toast;
 }
 
-impl Content for PostContent {
-	type Media = PostMedia;
+impl Content for Post {
+	type Media = media::Post;
 
 	fn header() -> &'static str { "Posts" }
 	fn media(&self) -> Option<&[Self::Media]> { Some(&self.media) }
@@ -97,8 +97,8 @@ impl Content for PostContent {
 	}
 }
 
-impl Content for MessageContent {
-	type Media = MessageMedia;
+impl Content for Message {
+	type Media = media::Message;
 
 	fn header() -> &'static str { "Messages" }
 	fn media(&self) -> Option<&[Self::Media]> { Some(&self.media) }
@@ -117,16 +117,16 @@ impl Content for MessageContent {
 	}
 }
 
-impl Content for StoryContent {
-	type Media = StoryMedia;
+impl Content for Story {
+	type Media = media::Story;
 
 	fn header() -> &'static str { "Stories" }
 	fn media(&self) -> Option<&[Self::Media]> { Some(&self.media) }
 	fn toast(&self) -> Toast { Toast::new() }
 }
 
-impl Content for NotificationContent {
-	type Media = PostMedia;
+impl Content for Notification {
+	type Media = media::Post;
 
 	fn header() -> &'static str { "Notifications" }
 	fn media(&self) -> Option<&[Self::Media]> { None }
@@ -139,8 +139,8 @@ impl Content for NotificationContent {
 	}
 }
 
-impl Content for StreamContent {
-	type Media = StreamMedia;
+impl Content for Stream {
+	type Media = media::Stream;
 
 	fn header() -> &'static str { "Streams" }
 	fn media(&self) -> Option<&[Self::Media]> { Some(slice::from_ref(&self.media)) }
@@ -153,5 +153,40 @@ impl Content for StreamContent {
 		.text3(&self.description);
 
 		toast
+	}
+}
+
+impl OFClient<Authorized> {
+	pub async fn get_post(&self, post_id: &(impl fmt::Display + std::marker::Sync)) -> anyhow::Result<Post> {
+		self.get(&format!("https://onlyfans.com/api2/v2/posts/{post_id}"))
+		.and_then(|response| response.json::<Post>().map_err(Into::into))
+		.await
+		.inspect(|content| info!("Got content: {:?}", content))
+		.inspect_err(|err| error!("Error reading content {post_id}: {err:?}"))
+	}
+
+	pub async fn like_post(&self, post: &Post) -> anyhow::Result<()> {
+		let user_id = post.author.id;
+		let post_id = post.id;
+
+		self.post(&format!("https://onlyfans.com/api2/v2/posts/{post_id}/favorites/{user_id}"))
+		.await
+		.map(|_| ())
+	}
+	
+	pub async fn like_message(&self, message: &Message) -> anyhow::Result<()> {
+		let message_id = message.id;
+
+		self.post(&format!("https://onlyfans.com/api2/v2/messages/{message_id}/like"))
+		.await
+		.map(|_| ())
+	}
+
+	pub async fn like_story(&self, story: &Story) -> anyhow::Result<()> {
+		let story_id = story.id;
+
+		self.post(&format!("https://onlyfans.com/api2/v2/stories/{story_id}/like"))
+		.await
+		.map(|_| ())
 	}
 }

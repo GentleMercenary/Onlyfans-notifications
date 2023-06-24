@@ -1,11 +1,10 @@
-use crate::client::Cookie;
-use crate::structs::NotificationMessage;
+use crate::{client::Cookie, structs::socket::Notification};
 
-use chrono::{DateTime, Utc};
 use serde::de::Error;
-use serde::{Deserialize, Deserializer};
+use chrono::{DateTime, Utc};
 use std::collections::HashMap;
 use strip_markdown::strip_markdown;
+use serde::{Deserialize, Deserializer};
 
 pub fn str_to_date<'de, D>(deserializer: D) -> Result<DateTime<Utc>, D::Error>
 where
@@ -71,13 +70,13 @@ where
 	non_empty_str(deserializer).map(str::to_owned)
 }
 
-pub fn notification_message<'de, D>(deserializer: D) -> Result<NotificationMessage, D::Error>
+pub fn notification_message<'de, D>(deserializer: D) -> Result<Notification, D::Error>
 where
 	D: Deserializer<'de>,
 {
 	#[derive(Deserialize)]
 	struct Outer {
-		new_message: NotificationMessage,
+		new_message: Notification,
 	}
 
 	Outer::deserialize(deserializer).map(|outer| outer.new_message)
