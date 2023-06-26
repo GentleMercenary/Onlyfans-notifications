@@ -27,20 +27,21 @@ pub struct AuthParams {
 }
 
 #[derive(Deserialize, Debug, Clone)]
-struct StaticParams {
-	static_param: String,
-	format: String,
-	checksum_indexes: Vec<i32>,
-	checksum_constant: i32,
+struct DyanmicRules {
+	#[serde(rename = "app-token")]
 	app_token: String,
-	remove_headers: Vec<String>,
+	static_param: String,
+	prefix: String,
+	suffix: String,
+	checksum_constant: i32,
+	checksum_indexes: Vec<i32>
 }
 
 #[once(time = 1800, result = true, sync_writes = true)]
-async fn get_static_params() -> anyhow::Result<StaticParams> {
-	reqwest::get("https://raw.githubusercontent.com/DIGITALCRIMINALS/dynamic-rules/main/onlyfans.json")
+async fn get_dynamic_rules() -> anyhow::Result<DyanmicRules> {
+	reqwest::get("https://raw.githubusercontent.com/SneakyOvis/onlyfans-dynamic-rules/main/rules.json")
 	.inspect_err(|err| error!("Error getting dynamic rules: {err:?}"))
-	.and_then(Response::json::<StaticParams>)
+	.and_then(Response::json::<DyanmicRules>)
 	.await
 	.inspect_err(|err| error!("Error reading dynamic rules: {err:?}"))
 	.map_err(Into::into)
@@ -63,26 +64,20 @@ impl OFClient {
 
 impl OFClient<Unauthorized> {
 	pub async fn authorize(self, params: AuthParams) -> anyhow::Result<OFClient<Authorized>> {
-		let static_params = get_static_params().await?;
+		let dynamic_rules = get_dynamic_rules().await?;
 
 		let cookie_jar = Jar::default();
-		let cookie = &params.cookie;
 		let url: Url = "https://onlyfans.com".parse()?;
 
-		cookie_jar.add_cookie_str(&format!("auth_id={}", &cookie.auth_id), &url);
-		cookie_jar.add_cookie_str(&format!("sess={}", &cookie.sess), &url);
-		cookie_jar.add_cookie_str(&format!("auth_hash={}", &cookie.auth_hash), &url);
+		cookie_jar.add_cookie_str(&format!("auth_id={}", &params.cookie.auth_id), &url);
+		cookie_jar.add_cookie_str(&format!("sess={}", &params.cookie.sess), &url);
+		cookie_jar.add_cookie_str(&format!("auth_hash={}", &params.cookie.auth_hash), &url);
 
 		let mut headers = header::HeaderMap::new();
 		headers.insert(header::USER_AGENT, header::HeaderValue::from_str(&params.user_agent)?);
 		headers.insert("x-bc", header::HeaderValue::from_str(&params.x_bc)?);
 		headers.insert("user-id", header::HeaderValue::from_str(&params.cookie.auth_id)?);
-
-		for remove_header in static_params.remove_headers {
-			headers.remove(remove_header);
-		}
-
-		headers.insert("app-token", header::HeaderValue::from_str(&static_params.app_token)?);
+		headers.insert("app-token", header::HeaderValue::from_str(&dynamic_rules.app_token)?);
 
 		let client = reqwest::Client::builder()
 		.cookie_store(true)
@@ -99,48 +94,41 @@ impl OFClient<Unauthorized> {
 
 impl OFClient<Authorized> {
 	pub async fn make_headers(&self, link: &str) -> anyhow::Result<header::HeaderMap> {
-		let static_params = get_static_params().await?;
+		let dynamic_rules = get_dynamic_rules().await?;
 
 		let mut headers = header::HeaderMap::new();
 
 		headers.insert("accept", header::HeaderValue::from_static("application/json, text/plain, */*"));
-		headers.insert("connection", header::HeaderValue::from_static("keep-alive"));
 
 		let parsed_url = Url::parse(link)?;
-		let mut path = parsed_url.path().to_owned();
-		let query = parsed_url.query();
-
-		let mut auth_id = "0";
-		if let Some(q) = query {
-			auth_id = &self.auth.params.cookie.auth_id;
-			path = format!("{path}?{q}");
-			headers.insert("user-id", header::HeaderValue::from_str(auth_id)?);
-		}
+		let path = parsed_url.path();
 
 		let time = SystemTime::now()
 			.duration_since(UNIX_EPOCH)?
 			.as_secs()
 			.to_string();
 
-		let msg = [&static_params.static_param, &time, &path, auth_id].join("\n");
+		let msg = [&dynamic_rules.static_param, &time, path, &self.auth.params.cookie.auth_id].join("\n");
 		let mut hasher = Sha1::new();
 		hasher.input_str(&msg);
 
-		let sha1_sign = hasher.result_str();
-		let sha1_b = sha1_sign.as_bytes();
+		let sha_hash = hasher.result_str();
+		let hash_ascii = sha_hash.as_bytes();
 
-		let checksum = static_params
+		let checksum = dynamic_rules
 			.checksum_indexes
 			.iter()
-			.map(|x| sha1_b[*x as usize] as i32)
-			.sum::<i32>() + static_params.checksum_constant;
+			.map(|x| hash_ascii[*x as usize] as i32)
+			.sum::<i32>() + dynamic_rules.checksum_constant;
 
 		headers.insert("sign", header::HeaderValue::from_str(
-				&static_params.format
-					.replacen("{}", &sha1_sign, 1)
-					.replacen("{:x}", &format!("{:x}", checksum.abs()), 1)
-			)?,
-		);
+			&format!("{}:{}:{:x}:{}",
+				dynamic_rules.prefix,
+				sha_hash,
+				checksum.abs(),
+				dynamic_rules.suffix
+			)
+		)?);
 		headers.insert("time", header::HeaderValue::from_str(&time)?);
 
 		Ok(headers)
@@ -155,7 +143,6 @@ impl OFClient<Authorized> {
 			.send()
 			.await
 			.and_then(Response::error_for_status)
-			.inspect_err(|err| error!("Error fetching {link}: {err:?}"))
 			.map_err(Into::into)
 		};
 
@@ -171,7 +158,6 @@ impl OFClient<Authorized> {
 			.send()
 			.await
 			.and_then(Response::error_for_status)
-			.inspect_err(|err| error!("Error posting to {link}: {err:?}"))
 			.map_err(Into::into)
 		};
 

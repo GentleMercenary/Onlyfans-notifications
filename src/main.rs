@@ -80,6 +80,7 @@ async fn make_connection(proxy: EventLoopProxy<Events>, cancel_token: Arc<Cancel
 			.connect(&me.ws_auth_token, &client).await?;
 
 		cloned_proxy.send_event(Events::Connected)?;
+
 		let res = select! {
 			_ = cancel_token.cancelled() => Ok(()),
 			res = socket.message_loop(client) => res,

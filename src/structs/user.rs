@@ -9,6 +9,7 @@ use futures_util::{TryFutureExt, future::try_join_all};
 pub struct Me {
 	#[serde(deserialize_with = "de_markdown_string")]
 	pub name: String,
+	pub id: u64,
 	pub username: String,
 	pub ws_auth_token: String,
 }
@@ -19,7 +20,7 @@ pub struct User {
 	pub id: u64,
 	pub name: String,
 	pub username: String,
-	pub avatar: String,
+	pub avatar: Option<String>,
 }
 
 #[derive(Deserialize, Debug)]
@@ -42,7 +43,7 @@ pub struct Subscriptions {
 }
 
 impl OFClient<Authorized> {
-	pub async fn get_user(&self, user_id: &(impl fmt::Display + std::marker::Sync)) -> anyhow::Result<User> {
+	pub async fn get_user(&self, user_id: impl fmt::Display) -> anyhow::Result<User> {
 		self.get(&format!("https://onlyfans.com/api2/v2/users/{user_id}"))
 		.and_then(|response| response.json::<User>().map_err(Into::into))
 		.await
@@ -50,7 +51,7 @@ impl OFClient<Authorized> {
 		.inspect_err(|err| error!("Error reading user {user_id}: {err:?}"))
 	}
 
-	pub async fn subscribe(&self, user_id: &(impl fmt::Display + std::marker::Sync)) -> anyhow::Result<User> {
+	pub async fn subscribe(&self, user_id: impl fmt::Display) -> anyhow::Result<User> {
 		self.post(&format!("https://onlyfans.com/api2/v2/users/{user_id}/subscribe"))
 		.and_then(|response| response.json::<User>().map_err(Into::into))
 		.await

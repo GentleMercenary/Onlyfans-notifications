@@ -17,12 +17,12 @@ pub struct Connect<'a> {
 }
 
 #[derive(Serialize, Debug)]
-pub struct Heartbeat {
+pub struct Heartbeat<'a> {
 	pub act: &'static str,
-	pub ids: &'static [&'static u64],
+	pub ids: &'a [u64],
 }
 
-impl Default for Heartbeat {
+impl<'a> Default for Heartbeat<'a> {
 	fn default() -> Self {
 		Heartbeat { act: "get_onlines", ids: &[] }
 	}
@@ -128,7 +128,7 @@ impl Message {
 			},
 			Self::Tagged(TaggedMessage::PostPublished(msg)) => {
 				info!("Post message received: {:?}", msg);
-				let content = client.get_post(&msg.id).await?;
+				let content = client.get_post(msg.id).await?;
 				
 				let handle = handle(&content.author, &content, client);
 				if SETTINGS.wait().should_like(&content.author.username) {
@@ -150,7 +150,7 @@ impl Message {
 			Self::Tagged(TaggedMessage::Stories(msg)) => {
 				info!("Story message received: {:?}", msg);
 				join_all(msg.iter().map(|story| async move {				
-					let user = client.get_user(&story.user_id).await?;
+					let user = client.get_user(story.user_id).await?;
 
 					let handle = handle(&user, &story.content, client);
 					if SETTINGS.wait().should_like(&user.username) {
@@ -173,40 +173,43 @@ impl Message {
 }
 
 async fn create_notification<T: content::Content>(content: &T, client: &OFClient<Authorized>, user: &User) -> anyhow::Result<()> {
-	let avatar_url = user.avatar.parse::<Url>()?;
-	let avatar_filename = avatar_url
-		.path_segments()
-		.and_then(|segments| {
-			let mut reverse_iter = segments.rev();
-			let ext = reverse_iter.next().and_then(|file| file.split('.').last());
-			let filename = reverse_iter.next();
-
-			Option::zip(filename, ext).map(|(filename, ext)| [filename, ext].join("."))
-		})
-		.ok_or_else(|| anyhow!("Filename unknown"))?;
-
-	let mut user_path = Path::new("data").join(&user.username);
-	std::fs::create_dir_all(&user_path)?;
-	user_path = user_path.canonicalize()?;
-
-	let (_, avatar) = client.fetch_file(
-			&user.avatar,
-			&user_path.join("Profile").join("Avatars"),
-			Some(&avatar_filename),
-		)
-		.await?;
-
 	let header = <T as content::Content>::header();
 	let mut toast: Toast = content.toast();
 	toast
 	.header(Header::new(header, header, ""))
-	.text1(&user.name)
-	.image(1,
-		Image::new_local(avatar)?
-		.with_hint_crop(ImageHintCrop::Circle)
-		.with_placement(ImagePlacement::AppLogoOverride),
-	);
+	.text1(&user.name);
 
+	if let Some(avatar) = &user.avatar {
+		let avatar_url = avatar.parse::<Url>()?;
+		let avatar_filename = avatar_url
+			.path_segments()
+			.and_then(|segments| {
+				let mut reverse_iter = segments.rev();
+				let ext = reverse_iter.next().and_then(|file| file.split('.').last());
+				let filename = reverse_iter.next();
+	
+				Option::zip(filename, ext).map(|(filename, ext)| [filename, ext].join("."))
+			})
+			.ok_or_else(|| anyhow!("Filename unknown"))?;
+	
+		let mut user_path = Path::new("data").join(&user.username);
+		std::fs::create_dir_all(&user_path)?;
+		user_path = user_path.canonicalize()?;
+	
+		let (_, avatar) = client.fetch_file(
+				avatar,
+				&user_path.join("Profile").join("Avatars"),
+				Some(&avatar_filename),
+			)
+			.await?;
+
+		toast.image(1,
+			Image::new_local(avatar)?
+			.with_hint_crop(ImageHintCrop::Circle)
+			.with_placement(ImagePlacement::AppLogoOverride),
+		);
+	}
+	
 	let thumb = content
 		.media()
 		.and_then(|media| {
