@@ -52,7 +52,7 @@ impl OFClient<Authorized> {
 	}
 
 	pub async fn subscribe(&self, user_id: impl fmt::Display) -> anyhow::Result<User> {
-		self.post(&format!("https://onlyfans.com/api2/v2/users/{user_id}/subscribe"))
+		self.post(&format!("https://onlyfans.com/api2/v2/users/{user_id}/subscribe"), None as Option<&String>)
 		.and_then(|response| response.json::<User>().map_err(Into::into))
 		.await
 		.inspect(|user| info!("Got user: {:?}", user))
@@ -85,17 +85,30 @@ impl OFClient<Authorized> {
 #[cfg(test)]
 mod tests {
 	use futures_util::TryFutureExt;
+use log::LevelFilter;
+use simplelog::{TermLogger, Config, TerminalMode, ColorChoice};
 	use crate::get_auth_params;
 	use super::OFClient;
 
+	fn test_init() {
+		TermLogger::init(
+			LevelFilter::Debug,
+			Config::default(),
+			TerminalMode::Mixed,
+			ColorChoice::Auto,
+		)
+		.unwrap();
+	}
+
 	#[tokio::test]
 	async fn get_subscriptions() -> anyhow::Result<()> {
+		test_init();
+
 		let client = futures::future::ready(get_auth_params())
 			.and_then(|params| OFClient::new().authorize(params))
 			.await?;
 
-		let users = client.get_subscriptions().await?;
-		for user in users {
+		for user in client.get_subscriptions().await? {
 			println!("{user:?}");
 		}
 

@@ -1,6 +1,7 @@
 use serde::Deserialize;
 
 #[derive(Deserialize, Debug)]
+#[serde(default)]
 pub struct Settings {
 	pub notify: Whitelist,
 	pub download: Whitelist,
@@ -42,7 +43,7 @@ impl Default for Settings {
 		Settings {
 			notify: Whitelist::Full(true),
 			download: Whitelist::Full(true),
-			like: Whitelist::Full(true)
+			like: Whitelist::Full(false)
 		}
 	}
 }

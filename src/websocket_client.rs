@@ -76,10 +76,15 @@ impl WebSocketClient<Connected> {
 	pub async fn message_loop(&mut self, client: OFClient<Authorized>) -> anyhow::Result<()> {
 		info!("Starting websocket message loop");
 		let mut interval = tokio::time::interval(Duration::from_secs(20));
+		let mut activity = tokio::time::interval(Duration::from_secs(300)); // Experimentally determined
 		let mut heartbeat_flight = false;
 
 		loop {
 			tokio::select! {
+				_ = activity.tick() => {
+					debug!("Simulating site activity: sending click-stats");
+					client.click_stats().await?;
+				},
 				_ = interval.tick() => {
 					self.send_heartbeat().await?;
 					heartbeat_flight = true;

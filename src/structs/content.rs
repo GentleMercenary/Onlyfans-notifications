@@ -169,7 +169,7 @@ impl OFClient<Authorized> {
 		let user_id = post.author.id;
 		let post_id = post.id;
 
-		self.post(&format!("https://onlyfans.com/api2/v2/posts/{post_id}/favorites/{user_id}"))
+		self.post(&format!("https://onlyfans.com/api2/v2/posts/{post_id}/favorites/{user_id}"), None as Option<&String>)
 		.await
 		.map(|_| ())
 	}
@@ -177,7 +177,7 @@ impl OFClient<Authorized> {
 	pub async fn like_message(&self, message: &Message) -> anyhow::Result<()> {
 		let message_id = message.id;
 
-		self.post(&format!("https://onlyfans.com/api2/v2/messages/{message_id}/like"))
+		self.post(&format!("https://onlyfans.com/api2/v2/messages/{message_id}/like"), None as Option<&String>)
 		.await
 		.map(|_| ())
 	}
@@ -185,7 +185,7 @@ impl OFClient<Authorized> {
 	pub async fn like_story(&self, story: &Story) -> anyhow::Result<()> {
 		let story_id = story.id;
 
-		self.post(&format!("https://onlyfans.com/api2/v2/stories/{story_id}/like"))
+		self.post(&format!("https://onlyfans.com/api2/v2/stories/{story_id}/like"), None as Option<&String>)
 		.await
 		.map(|_| ())
 	}

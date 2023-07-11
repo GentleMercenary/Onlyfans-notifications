@@ -110,7 +110,7 @@ async fn make_connection(proxy: EventLoopProxy<Events>, cancel_token: Arc<Cancel
 enum State { Disconnected, Connected }
 
 #[derive(Clone, Eq, PartialEq, Debug)]
-enum Events { Connected, Disconnected, /* Clear,*/ }
+enum Events { Connected, Disconnected }
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
@@ -163,8 +163,8 @@ async fn main() -> anyhow::Result<()> {
 
 	let mut tray_menu = ContextMenu::new();
 
+	let clear_id = tray_menu.add_item(MenuItemAttributes::new("Clear notifications")).id();	
 	let quit_id = tray_menu.add_item(MenuItemAttributes::new("Quit")).id();
-	let clear_id = tray_menu.add_item(MenuItemAttributes::new("Clear notifications")).id();
 
 	let mut tray_icon = SystemTrayBuilder::new(second_icon.clone(), Some(tray_menu))
 		.with_tooltip("OF notifier")
