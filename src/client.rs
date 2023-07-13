@@ -7,13 +7,13 @@ use futures::{StreamExt, TryFutureExt};
 use crypto::{digest::Digest, sha1::Sha1};
 use tokio_retry::{strategy::FixedInterval, Retry};
 use reqwest::{cookie::Jar, header::{self, HeaderValue}, Client, Response, Url};
-use std::{fs::{self, File}, io::Write, path::{Path, PathBuf}, sync::Arc, time::{SystemTime, UNIX_EPOCH}};
+use std::{fs::{self, File}, io::Write, path::{Path, PathBuf}, sync::Arc, time::{SystemTime, UNIX_EPOCH}, collections::HashMap};
 
 #[derive(Debug, Clone)]
 pub struct Cookie {
 	pub sess: String,
 	pub auth_id: String,
-	pub auth_hash: String,
+    pub other: HashMap<String, String>,
 }
 
 impl TryFrom<Cookie> for Jar {
@@ -25,7 +25,9 @@ impl TryFrom<Cookie> for Jar {
 
 		cookie_jar.add_cookie_str(&format!("sess={}", &value.sess), &url);
 		cookie_jar.add_cookie_str(&format!("auth_id={}", &value.auth_id), &url);
-		cookie_jar.add_cookie_str(&format!("auth_hash={}", &value.auth_hash), &url);
+		for (k, v) in value.other {
+			cookie_jar.add_cookie_str(&format!("{}={}", &k, &v), &url);
+		}
 
 		Ok(cookie_jar)
     }

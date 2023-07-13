@@ -28,28 +28,28 @@ where
 	D: Deserializer<'de>,
 {
 	let s = non_empty_str(deserializer)?;
-	let mut cookie_map: HashMap<&str, &str> = HashMap::new();
+	let mut cookie_map: HashMap<String, String> = HashMap::new();
 	let filtered_str = s.replace(';', "");
 	for c in filtered_str.split(' ') {
 		let (k, v) = c
 			.split_once('=')
 			.ok_or_else(|| D::Error::custom("No Key/Value cookie pair found"))?;
-		cookie_map.insert(k, v);
+		cookie_map.insert(k.to_string(), v.to_string());
 	}
 
+	let auth_id = cookie_map
+		.remove("auth_id")
+		.ok_or_else(|| D::Error::custom("'auth_id' missing from cookie auth parameter"))?;
+
+	let sess = cookie_map
+		.remove("sess")
+		.ok_or_else(|| D::Error::custom("'sess' missing from cookie auth parameter"))?;
+
 	Ok(Cookie {
-		auth_id: cookie_map
-			.get("auth_id")
-			.ok_or_else(|| D::Error::custom("'auth_id' missing from cookie auth parameter"))?
-			.to_string(),
-		sess: cookie_map
-			.get("sess")
-			.ok_or_else(|| D::Error::custom("'sess' missing from cookie auth parameter"))?
-			.to_string(),
-		auth_hash: cookie_map
-			.get("auth_hash")
-			.ok_or_else(|| D::Error::custom("'auth_hash' missing from cookie auth parameter"))?
-			.to_string(),
+		auth_id,
+		sess,
+		other: cookie_map
+
 	})
 }
 
