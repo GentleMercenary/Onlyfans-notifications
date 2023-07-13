@@ -107,7 +107,7 @@ async fn make_connection(proxy: EventLoopProxy<Events>, cancel_token: Arc<Cancel
 }
 
 #[derive(PartialEq, Eq)]
-enum State { Disconnected, Connected }
+enum State { Disconnected, Connected, Connecting, Disconnecting }
 
 #[derive(Clone, Eq, PartialEq, Debug)]
 enum Events { Connected, Disconnected }
@@ -172,7 +172,10 @@ async fn main() -> anyhow::Result<()> {
 
 	let mut state = State::Disconnected;
 	let mut cancel_token = Arc::new(CancellationToken::new());
-
+	
+	info!("Connecting");
+	state = State::Connecting;
+	tokio::spawn(make_connection(proxy.clone(), cancel_token.clone()));
 	event_loop.run(move |event, _, control_flow| {
 		*control_flow = ControlFlow::Wait;
 		let _ = tray_icon;
@@ -195,13 +198,16 @@ async fn main() -> anyhow::Result<()> {
 					match state {
 						State::Connected => {
 							info!("Disconnecting");
+							state = State::Disconnecting;
 							cancel_token.cancel();
 						},
 						State::Disconnected => {
 							cancel_token = Arc::new(CancellationToken::new());
 							info!("Connecting");
+							state = State::Connecting;
 							tokio::spawn(make_connection(proxy.clone(), cancel_token.clone()));
-						}
+						},
+						_ => ()
 					}
 				}
 			},
