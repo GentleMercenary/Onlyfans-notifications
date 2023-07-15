@@ -157,7 +157,7 @@ impl Content for Stream {
 }
 
 impl OFClient<Authorized> {
-	pub async fn get_post(&self, post_id: impl fmt::Display) -> anyhow::Result<Post> {
+	pub async fn get_post<I: fmt::Display>(&self, post_id: I) -> anyhow::Result<Post> {
 		self.get(&format!("https://onlyfans.com/api2/v2/posts/{post_id}"))
 		.and_then(|response| response.json::<Post>().map_err(Into::into))
 		.await

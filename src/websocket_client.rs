@@ -1,6 +1,7 @@
 use crate::{client::{OFClient, Authorized}, structs::socket};
 
 use anyhow::bail;
+use serde::Serialize;
 use std::time::Duration;
 use futures::TryFutureExt;
 use tokio::{net::TcpStream, time::timeout};
@@ -18,6 +19,18 @@ impl TryFrom<Message> for socket::Message {
 		.inspect_err(|err| warn!("Message could not be parsed: {s}, reason: {err}"))
 		.map_err(Into::into)
 	}
+}
+
+#[derive(Serialize, Debug)]
+pub struct Connect<'a> {
+	pub act: &'static str,
+	pub token: &'a str,
+}
+
+#[derive(Serialize, Debug)]
+pub struct Heartbeat<'a> {
+	pub act: &'static str,
+	pub ids: &'a [u64],
 }
 
 pub struct Disconnected;
@@ -50,7 +63,7 @@ impl WebSocketClient<Disconnected> {
 
 		info!("Sending connect message");
 		connected_client.connection.sink
-		.send(serde_json::to_vec(&socket::Connect { act: "connect", token })?.into())
+		.send(serde_json::to_vec(&Connect { act: "connect", token })?.into())
 		.await?;
 
 		connected_client
@@ -107,11 +120,11 @@ impl WebSocketClient<Connected> {
 	}
 
 	async fn send_heartbeat(&mut self) -> anyhow::Result<()> {
-		let heartbeat = socket::Heartbeat::default();
+		const HEARTBEAT: Heartbeat = Heartbeat { act: "get_onlines", ids: &[] };
 
-		debug!("Sending heartbeat: {heartbeat:?}");
+		debug!("Sending heartbeat: {HEARTBEAT:?}");
 		self.connection.sink
-		.send(Message::Binary(serde_json::to_vec(&heartbeat)?))
+		.send(Message::Binary(serde_json::to_vec(&HEARTBEAT)?))
 		.await
 		.map_err(Into::into)
 	}

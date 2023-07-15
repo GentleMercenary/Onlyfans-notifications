@@ -43,7 +43,7 @@ pub struct Subscriptions {
 }
 
 impl OFClient<Authorized> {
-	pub async fn get_user(&self, user_id: impl fmt::Display) -> anyhow::Result<User> {
+	pub async fn get_user<I: fmt::Display>(&self, user_id: I) -> anyhow::Result<User> {
 		self.get(&format!("https://onlyfans.com/api2/v2/users/{user_id}"))
 		.and_then(|response| response.json::<User>().map_err(Into::into))
 		.await
@@ -51,7 +51,7 @@ impl OFClient<Authorized> {
 		.inspect_err(|err| error!("Error reading user {user_id}: {err:?}"))
 	}
 
-	pub async fn subscribe(&self, user_id: impl fmt::Display) -> anyhow::Result<User> {
+	pub async fn subscribe<I: fmt::Display>(&self, user_id: I) -> anyhow::Result<User> {
 		self.post(&format!("https://onlyfans.com/api2/v2/users/{user_id}/subscribe"), None as Option<&String>)
 		.and_then(|response| response.json::<User>().map_err(Into::into))
 		.await

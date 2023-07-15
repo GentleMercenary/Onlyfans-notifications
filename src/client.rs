@@ -5,8 +5,7 @@ use cached::proc_macro::once;
 use anyhow::{anyhow, Context};
 use futures::{StreamExt, TryFutureExt};
 use crypto::{digest::Digest, sha1::Sha1};
-use tokio_retry::{strategy::FixedInterval, Retry};
-use reqwest::{cookie::Jar, header::{self, HeaderValue}, Client, Response, Url};
+use reqwest::{cookie::Jar, header::{self, HeaderValue}, Client, Response, Url, Method, RequestBuilder, IntoUrl};
 use std::{fs::{self, File}, io::Write, path::{Path, PathBuf}, sync::Arc, time::{SystemTime, UNIX_EPOCH}, collections::HashMap};
 
 #[derive(Debug, Clone)]
@@ -80,8 +79,6 @@ impl OFClient {
 
 impl OFClient<Unauthorized> {
 	pub async fn authorize(self, params: AuthParams) -> anyhow::Result<OFClient<Authorized>> {
-		let dynamic_rules = get_dynamic_rules().await?;
-
 		let cookie_jar = Jar::try_from(params.cookie.clone())?;
 
 		let mut headers = header::HeaderMap::new();
@@ -89,7 +86,6 @@ impl OFClient<Unauthorized> {
 		headers.insert(header::USER_AGENT, HeaderValue::from_str(&params.user_agent)?);
 		headers.insert("x-bc", HeaderValue::from_str(&params.x_bc)?);
 		headers.insert("user-id", HeaderValue::from_str(&params.cookie.auth_id)?);
-		headers.insert("app-token", HeaderValue::from_str(&dynamic_rules.app_token)?);
 
 		let client = reqwest::Client::builder()
 		.cookie_store(true)
@@ -105,10 +101,10 @@ impl OFClient<Unauthorized> {
 }
 
 impl OFClient<Authorized> {
-	pub async fn make_headers(&self, link: &str) -> anyhow::Result<header::HeaderMap> {
+	pub async fn make_headers<U: IntoUrl>(&self, link: U) -> anyhow::Result<header::HeaderMap> {
 		let dynamic_rules = get_dynamic_rules().await?;
 
-		let url = Url::parse(link)?;
+		let url: Url = link.into_url()?;
 		let mut url_param = url.path().to_string();
 		if let Some(query) = url.query() {
 			url_param.push('?');
@@ -147,45 +143,43 @@ impl OFClient<Authorized> {
 			)
 		)?);
 		headers.insert("time", HeaderValue::from_str(&time)?);
+		headers.insert("app-token", HeaderValue::from_str(&dynamic_rules.app_token)?);
 
 		Ok(headers)
 	}
 
-	pub async fn get(&self, link: &str) -> anyhow::Result<Response> {
-		Retry::spawn(FixedInterval::from_millis(1000).take(5), || async move {
-			let headers = self.make_headers(link).await?;
+	async fn request<U: IntoUrl>(&self, method: Method, link: U) -> anyhow::Result<RequestBuilder> {
+		let headers = self.make_headers(link.as_str()).await?;
 
-			self.auth.client.get(link)
-			.headers(headers)
-			.send()
-			.await
-			.and_then(Response::error_for_status)
-			.map_err(Into::into)
-		}).await
+		Ok(self.auth.client.request(method, link)
+			.headers(headers))
 	}
 
-	pub async fn post(&self, link: &str, body: Option<&impl Serialize>) -> anyhow::Result<Response> {
-		Retry::spawn(FixedInterval::from_millis(1000).take(5), || async move {
-			let headers = self.make_headers(link).await?;
-	
-			let mut builder = self.auth.client.post(link);
-			if let Some(body) = body {
-				builder = builder.json(body);
-			}
-
-			builder.headers(headers)
-			.send()
-			.await
-			.and_then(Response::error_for_status)
-			.map_err(Into::into)
-		}).await
+	pub async fn get<U: IntoUrl>(&self, link: U) -> anyhow::Result<Response> {
+		self.request(Method::GET, link)
+		.await?
+		.send()
+		.await
+		.and_then(Response::error_for_status)
+		.map_err(Into::into)
 	}
 
-	pub async fn fetch_file(&self, url: &str, path: &Path, filename: Option<&str>) -> anyhow::Result<(bool, PathBuf)> {
-		let parsed_url: Url = url.parse()?;
+	pub async fn post<U: IntoUrl>(&self, link: U, body: Option<&impl Serialize>) -> anyhow::Result<Response> {
+		let mut builder = self.request(Method::POST, link).await?;
+		if let Some(body) = body { builder = builder.json(body); }
+
+		builder
+		.send()
+		.await
+		.and_then(Response::error_for_status)
+		.map_err(Into::into)
+	}
+
+	pub async fn fetch_file<U: IntoUrl>(&self, link: U, path: &Path, filename: Option<&str>) -> anyhow::Result<(bool, PathBuf)> {
+		let url = link.into_url()?;
 		let filename = filename
 		.or_else(|| {
-			parsed_url
+			url
 			.path_segments()
 			.and_then(Iterator::last)
 			.and_then(|name| (!name.is_empty()).then_some(name))

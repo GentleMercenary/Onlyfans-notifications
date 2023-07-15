@@ -6,27 +6,9 @@ use crate::structs::{content, user::User, media::{download_media, Media}};
 use reqwest::Url;
 use std::path::Path;
 use anyhow::{anyhow, bail};
-use serde::{Deserialize, Serialize};
+use serde::Deserialize;
 use futures::future::{join, join_all};
 use winrt_toast::{content::image::{ImageHintCrop, ImagePlacement}, Header, Image, Toast};
-
-#[derive(Serialize, Debug)]
-pub struct Connect<'a> {
-	pub act: &'static str,
-	pub token: &'a str,
-}
-
-#[derive(Serialize, Debug)]
-pub struct Heartbeat<'a> {
-	pub act: &'static str,
-	pub ids: &'a [u64],
-}
-
-impl<'a> Default for Heartbeat<'a> {
-	fn default() -> Self {
-		Heartbeat { act: "get_onlines", ids: &[] }
-	}
-}
 
 #[derive(Deserialize, Debug)]
 pub struct Onlines {
@@ -109,7 +91,7 @@ impl Message {
 	pub async fn handle_message(self, client: &OFClient<Authorized>) -> anyhow::Result<()> {
 		return match self {
 			Self::Connected(msg) => {
-				info!("Connect message received: {:?}", msg);
+				info!("Connected message received: {:?}", msg);
 
 				let mut toast = Toast::new();
 				toast.text1("OF Notifier").text2("Connection established");
@@ -226,7 +208,7 @@ async fn create_notification<T: content::Content>(content: &T, client: &OFClient
 	Ok(())
 }
 
-async fn handle<T: content::Content + Send + Sync>(user: &User, content: &T, client: &OFClient<Authorized>) -> anyhow::Result<()> {
+async fn handle<T: content::Content>(user: &User, content: &T, client: &OFClient<Authorized>) -> anyhow::Result<()> {
 	let settings = SETTINGS.wait();
 
 	let username = &user.username;
@@ -251,7 +233,10 @@ async fn handle<T: content::Content + Send + Sync>(user: &User, content: &T, cli
 	return match (notify, download) {
 		(Some(notify), Some(download)) => join(notify, download).await.0,
 		(Some(notify), None) => notify.await,
-		(None, Some(download)) => Ok(download.await),
+		(None, Some(download)) => {
+			download.await;
+			Ok(())
+		},
 		_ => Ok(())
 	};
 }

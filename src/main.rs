@@ -68,8 +68,6 @@ async fn make_connection(proxy: EventLoopProxy<Events>, cancel_token: Arc<Cancel
 	futures::future::ready(get_auth_params())
 	.and_then(|params| OFClient::new().authorize(params))
 	.and_then(|client| async move {
-		info!("Authorization successful");
-
 		let me = client.get("https://onlyfans.com/api2/v2/users/me")
 			.and_then(|response| response.json::<user::Me>().map_err(Into::into))
 			.await?;
@@ -170,11 +168,10 @@ async fn main() -> anyhow::Result<()> {
 		.with_tooltip("OF notifier")
 		.build(&event_loop)?;
 
-	let mut state = State::Disconnected;
 	let mut cancel_token = Arc::new(CancellationToken::new());
 	
 	info!("Connecting");
-	state = State::Connecting;
+	let mut state = State::Connecting;
 	tokio::spawn(make_connection(proxy.clone(), cancel_token.clone()));
 	event_loop.run(move |event, _, control_flow| {
 		*control_flow = ControlFlow::Wait;
