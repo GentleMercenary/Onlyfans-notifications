@@ -1,4 +1,6 @@
 {
     "notify": true,
-    "download": true
+    "download": true,
+	"like": false,
+	"reconnect": true
 }
