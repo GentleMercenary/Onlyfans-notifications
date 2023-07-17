@@ -8,6 +8,15 @@ use tokio::{net::TcpStream, time::timeout};
 use futures_util::{SinkExt, StreamExt, stream::{SplitStream, SplitSink}};
 use tokio_tungstenite::{connect_async, MaybeTlsStream, WebSocketStream, tungstenite::Message};
 
+#[derive(Debug)]
+pub struct TimeoutExpired;
+impl std::error::Error for TimeoutExpired {}
+impl std::fmt::Display for TimeoutExpired {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str("Timeout expired")
+    }
+}
+
 impl TryFrom<Message> for socket::Message {
 	type Error = anyhow::Error;
 
@@ -131,7 +140,7 @@ impl WebSocketClient<Connected> {
 
 	async fn wait_for_message(&mut self, duration: Duration) -> anyhow::Result<Option<socket::Message>> {
 		match timeout(duration, self.connection.stream.next()).await {
-			Err(_) => bail!("Timeout expired"),
+			Err(_) => bail!(TimeoutExpired),
 			Ok(None) => bail!("Message queue exhausted"),
 			Ok(Some(msg)) => msg.map(|msg| msg.try_into().ok()).map_err(Into::into)
 		}

@@ -65,7 +65,7 @@ async fn make_connection(proxy: EventLoopProxy<Events>, cancel_token: Arc<Cancel
 	info!("Fetching authentication parameters");
 
 	let cloned_proxy = proxy.clone();
-	futures::future::ready(get_auth_params())
+	let res = futures::future::ready(get_auth_params())
 	.and_then(|params| OFClient::new().authorize(params))
 	.and_then(|client| async move {
 		let me = client.get("https://onlyfans.com/api2/v2/users/me")
@@ -88,27 +88,16 @@ async fn make_connection(proxy: EventLoopProxy<Events>, cancel_token: Arc<Cancel
 		socket.close().await?;
 		res
 	})
-	.unwrap_or_else(|err| {
-		error!("Unexpected termination: {:?}", err);
-
-		let mut toast = Toast::new();
-		toast
-		.text1("OF Notifier")
-		.text2("An error occurred, disconnecting")
-		.duration(ToastDuration::Long);
-
-		MANAGER.wait().show(&toast).expect("Showed error notification");
-	})
 	.await;
 
-	proxy.send_event(Events::Disconnected).expect("Sent disconnect message")
+	proxy.send_event(Events::Disconnected(res)).expect("Sent disconnect message");
 }
 
 #[derive(PartialEq, Eq)]
 enum State { Disconnected, Connected, Connecting, Disconnecting }
 
-#[derive(Clone, Eq, PartialEq, Debug)]
-enum Events { Connected, Disconnected }
+#[derive(Debug)]
+enum Events { Connected, Disconnected(anyhow::Result<()>) }
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
@@ -184,7 +173,25 @@ async fn main() -> anyhow::Result<()> {
 					state = State::Connected;
 					info!("Connected");
 				}
-				Events::Disconnected => {
+				Events::Disconnected(reason) => {
+					if let Err(err) = reason {
+						if SETTINGS.wait().reconnect && err.root_cause().is::<websocket_client::TimeoutExpired>() {
+							warn!("Timeout expired");
+							tokio::spawn(make_connection(proxy.clone(), cancel_token.clone()));
+							return;
+						}
+
+						error!("Unexpected termination: {:?}", err);
+				
+						let mut toast = Toast::new();
+						toast
+						.text1("OF Notifier")
+						.text2("An error occurred, disconnecting")
+						.duration(ToastDuration::Long);
+				
+						MANAGER.wait().show(&toast).expect("Showed error notification");
+					}
+
 					tray_icon.set_icon(second_icon.clone());
 					state = State::Disconnected;
 					info!("Disconnected");

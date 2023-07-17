@@ -5,7 +5,8 @@ use serde::Deserialize;
 pub struct Settings {
 	pub notify: Whitelist,
 	pub download: Whitelist,
-	pub like: Whitelist
+	pub like: Whitelist,
+	pub reconnect: bool
 }
 
 #[derive(Deserialize, Debug)]
@@ -43,7 +44,8 @@ impl Default for Settings {
 		Settings {
 			notify: Whitelist::Full(true),
 			download: Whitelist::Full(true),
-			like: Whitelist::Full(false)
+			like: Whitelist::Full(false),
+			reconnect: true
 		}
 	}
 }
