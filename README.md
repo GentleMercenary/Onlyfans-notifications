@@ -14,14 +14,20 @@ Files are downloaded to `data/{model_name}/{origin}/{content_type}/{filename}` w
 This is the same format as the default for [this scraper](https://github.com/DIGITALCRIMINALs/OnlyFans), so you can symlink the `data` folder to wherever you store your scrapes or vice versa.
 
 ## Settings
-You can choose wether or not you receive notifications or download data in settings.json. Setting either to true or false enables/disables this functionality. Aside from this you can list the usernames for whom you wish these features to be active.
+You can choose wether or not you receive notifications, download data or like new content in settings.json. Setting any to true or false enables/disables this functionality. Aside from this you can list the usernames for whom you wish these features to be active.
+For more granular control, you can specify for which types of content to enable that feature. <br>
+Allowed content types are `posts, messages, stories, notifications, streams`. Any missing fields will default to being `false`.
 
 #### Example
 If you want to receive notifications for your entire following list but only want to download the media for certain models, your settings.json would look like this:
 ```
 {
     "notify": true,
-    "download": ["username1", "username2"]
+    "download": ["username1", "username2"],
+    "like": {
+        "posts": true,
+        "stories": ["username3"]
+    }
 }
 ```
 Note that a model's username and name can be different. The username can most easily be found in the profile url: `onlyfans.com/{username}`
@@ -31,4 +37,4 @@ When the connection gets interrupted (because of unstable network, wake up from 
 
 | Connected | Disconnected |
 |-----------|--------------|
-|![Connected](res/icon.ico)|![Disconnected](res/icon2.ico)|
+|![Connected](icons/icon.ico)|![Disconnected](icons/icon2.ico)|
