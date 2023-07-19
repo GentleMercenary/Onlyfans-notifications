@@ -87,10 +87,7 @@ impl Settings {
 
 	pub fn should_like<C: Content>(&self, username: &str) -> bool {
 		match &self.like {
-			Whitelist::Global(global) => match global {
-				GlobalSelection::Select(whitelist) => whitelist.iter().any(|s| s == username),
-				GlobalSelection::Full(b) => *b,
-			},
+			Whitelist::Global(global) => global.should_like(username),
 			Whitelist::Granular(granular) => match C::header() {
 				"Posts" => granular.posts.should_like(username),
 				"Messages" => granular.messages.should_like(username),
