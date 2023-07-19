@@ -113,7 +113,7 @@ impl Message {
 				let content = client.get_post(msg.id).await?;
 				
 				let handle = handle(&content.author, &content, client);
-				if SETTINGS.wait().should_like(&content.author.username) {
+				if SETTINGS.wait().should_like::<content::Post>(&content.author.username) {
 					join(handle, client.like_post(&content)).await.0
 				} else {
 					handle.await
@@ -123,7 +123,7 @@ impl Message {
 				info!("Chat message received: {:?}", msg);
 
 				let handle = handle(&msg.from_user, &msg.content, client);
-				if SETTINGS.wait().should_like(&msg.from_user.username) {
+				if SETTINGS.wait().should_like::<content::Message>(&msg.from_user.username) {
 					join(handle, client.like_message(&msg.content)).await.0
 				} else {
 					handle.await
@@ -135,7 +135,7 @@ impl Message {
 					let user = client.get_user(story.user_id).await?;
 
 					let handle = handle(&user, &story.content, client);
-					if SETTINGS.wait().should_like(&user.username) {
+					if SETTINGS.wait().should_like::<content::Story>(&user.username) {
 						join(handle, client.like_story(&story.content)).await.0
 					} else {
 						handle.await
@@ -214,16 +214,16 @@ async fn handle<T: content::Content>(user: &User, content: &T, client: &OFClient
 	let username = &user.username;
 	let path = Path::new("data")
 		.join(username)
-		.join(<T as content::Content>::header());
+		.join(T::header());
 
 	let notify = settings
-		.should_notify(username)
+		.should_notify::<T>(username)
 		.then(|| {
 			create_notification(content, client, user)
 		});
 	
 	let download = settings
-		.should_download(username)
+		.should_download::<T>(username)
 		.then(|| {
 			content
 			.media()
@@ -243,7 +243,7 @@ async fn handle<T: content::Content>(user: &User, content: &T, client: &OFClient
 
 #[cfg(test)]
 mod tests {
-	use crate::{get_auth_params, settings::Settings, init, SETTINGS, client::OFClient};
+	use crate::{get_auth_params, settings::{Settings, GlobalSelection, Whitelist}, init, SETTINGS, client::OFClient};
 
 	use std::sync::Once;
 	use std::thread::sleep;
@@ -258,7 +258,10 @@ mod tests {
 			init();
 
 			SETTINGS
-			.set(Settings::default())
+			.set(Settings {
+				notify: Whitelist::Global(GlobalSelection::Full(true)),
+				..Settings::default()
+			})
 			.unwrap();
 	
 			TermLogger::init(
