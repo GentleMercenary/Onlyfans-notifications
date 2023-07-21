@@ -25,16 +25,15 @@ use serde::Deserialize;
 use futures::TryFutureExt;
 use client::{OFClient, AuthParams};
 use image::io::Reader as ImageReader;
-use cached::once_cell::sync::OnceCell;
 use winrt_toast::{Toast, ToastManager, ToastDuration, register};
-use std::{fs::{self, File}, path::Path, io::{Error, ErrorKind}};
-use simplelog::{Config, LevelFilter, WriteLogger, TermLogger,TerminalMode, CombinedLogger, ColorChoice};
+use std::{fs::{self, File}, path::Path, io::{Error, ErrorKind}, sync::OnceLock};
+use simplelog::{Config, LevelFilter, WriteLogger, TermLogger,TerminalMode, ColorChoice};
 use tao::{event_loop::{EventLoop, ControlFlow, EventLoopProxy}, window::Icon, system_tray::SystemTrayBuilder, menu::{ContextMenu, MenuItemAttributes}, event::{Event, TrayEvent}};
 
 
-static MANAGER: OnceCell<ToastManager> = OnceCell::new();
-static SETTINGS: OnceCell<Mutex<Settings>> = OnceCell::new();
-static TEMPDIR: OnceCell<TempDir> = OnceCell::new();
+static MANAGER: OnceLock<ToastManager> = OnceLock::new();
+static SETTINGS: OnceLock<Mutex<Settings>> = OnceLock::new();
+static TEMPDIR: OnceLock<TempDir> = OnceLock::new();
 
 fn init() -> anyhow::Result<()> {
 	let aum_id = "OFNotifier";
@@ -83,11 +82,12 @@ async fn make_connection(channel: EventLoopProxy<Events>, state: Receiver<State>
 			break;
 		}
 		
-		info!("Fetching authentication parameters");
+		info!("Reading authentication parameters");
 		let cloned_channel = channel.clone();
 		let res = futures::future::ready(get_auth_params())
 		.and_then(|params| OFClient::new().authorize(params))
 		.and_then(|client| async move {
+			info!("Fetching user data");
 			let me = client.get("https://onlyfans.com/api2/v2/users/me")
 				.and_then(|response| response.json::<user::Me>().map_err(Into::into))
 				.await?;
@@ -105,7 +105,7 @@ async fn make_connection(channel: EventLoopProxy<Events>, state: Receiver<State>
 					res = socket.message_loop(&client) => res,
 				};
 
-				if SETTINGS.wait().lock().await.reconnect && let Err(err) = &res {
+				if SETTINGS.get().unwrap().lock().await.reconnect && let Err(err) = &res {
 					error!("{err}");
 					if let Some(ws_error::Protocol(protocol_error::ResetWithoutClosingHandshake)) = err.downcast_ref::<ws_error>() {
 							continue;
@@ -137,12 +137,11 @@ fn main() -> anyhow::Result<()> {
 	let mut log_path = log_folder.join(Local::now().format("%Y%m%d_%H%M%S").to_string());
 	log_path.set_extension("log");
 
-	CombinedLogger::init(
-		vec![
-			WriteLogger::new(if cfg!(debug_assertions) { LevelFilter::Debug } else { LevelFilter::Info }, Config::default(), File::create(log_path).expect("Created log file")),
-			TermLogger::new(if cfg!(debug_assertions) { LevelFilter::Debug } else { LevelFilter::Info }, Config::default(), TerminalMode::Mixed, ColorChoice::Auto)
-		]
-	)?;
+	if cfg!(debug_assertions) {
+		TermLogger::init(LevelFilter::Debug, Config::default(), TerminalMode::Mixed, ColorChoice::Auto)?;
+	} else {
+		WriteLogger::init(LevelFilter::Info, Config::default(), File::create(log_path)?)?;
+	}
 
 	init()?;
 
@@ -152,25 +151,20 @@ fn main() -> anyhow::Result<()> {
 	let event_loop = EventLoop::<Events>::with_user_event();
 	let proxy = event_loop.create_proxy();
 
-	let first_icon = ImageReader::open(Path::new("icons").join("icon.ico"))
-	.map_err(<anyhow::Error>::from)
-	.and_then(|reader| reader.decode().map_err(<anyhow::Error>::from))
-	.and_then(|image| {
-		let width = image.width();
-		let height = image.height();
-		Icon::from_rgba(image.into_bytes(), width, height)
+	let read_image = |path: &Path| {
+		ImageReader::open(path)
 		.map_err(<anyhow::Error>::from)
-	})?;
+		.and_then(|reader| reader.decode().map_err(<anyhow::Error>::from))
+		.and_then(|image| {
+			let width = image.width();
+			let height = image.height();
+			Icon::from_rgba(image.into_bytes(), width, height)
+			.map_err(<anyhow::Error>::from)
+		})
+	};
 
-	let second_icon = ImageReader::open(Path::new("icons").join("icon2.ico"))
-	.map_err(<anyhow::Error>::from)
-	.and_then(|reader| reader.decode().map_err(<anyhow::Error>::from))
-	.and_then(|image| {
-		let width = image.width();
-		let height = image.height();
-		Icon::from_rgba(image.into_bytes(), width, height)
-		.map_err(<anyhow::Error>::from)
-	})?;
+	let first_icon = read_image(&Path::new("icons").join("icon.ico"))?;
+	let second_icon = read_image(&Path::new("icons").join("icon2.ico"))?;
 
 	let mut tray_menu = ContextMenu::new();
 
@@ -205,7 +199,7 @@ fn main() -> anyhow::Result<()> {
 				}
 				Events::Disconnected(reason) => {
 					if let Err(err) = reason {
-						if SETTINGS.wait().blocking_lock().reconnect && err.root_cause().is::<websocket_client::TimeoutExpired>() {
+						if SETTINGS.get().unwrap().blocking_lock().reconnect && err.root_cause().is::<websocket_client::TimeoutExpired>() {
 							warn!("Timeout expired");
 							state.send_replace(State::Connecting);
 							return;
@@ -219,7 +213,7 @@ fn main() -> anyhow::Result<()> {
 						.text2("An error occurred, disconnecting")
 						.duration(ToastDuration::Long);
 				
-						MANAGER.wait().show(&toast)
+						MANAGER.get().unwrap().show(&toast)
 						.inspect_err(|err| error!("{err}"))
 						.unwrap();
 					}
@@ -236,7 +230,6 @@ fn main() -> anyhow::Result<()> {
 						State::Connected => {
 							info!("Disconnecting");
 							state.send_replace(State::Disconnecting);
-							info!("A");
 						},
 						State::Disconnected => {
 							info!("Connecting");
@@ -250,7 +243,7 @@ fn main() -> anyhow::Result<()> {
 				if menu_id == quit_id {
 					info!("Closing application");
 					state.send_replace(State::Disconnecting);
-					MANAGER.wait().clear()
+					MANAGER.get().unwrap().clear()
 					.inspect_err(|err| error!("{err}"))
 					.unwrap();
 
@@ -258,13 +251,13 @@ fn main() -> anyhow::Result<()> {
 
 					*control_flow = ControlFlow::Exit;
 				} else if menu_id == clear_id {
-					MANAGER.wait().clear()
+					MANAGER.get().unwrap().clear()
 					.inspect_err(|err| error!("{err}"))
 					.unwrap();
 				} else if menu_id == reload_id {
 					debug!("Reloading settings");
 					match get_settings() {
-						Ok(settings) => *SETTINGS.wait().blocking_lock() = settings,
+						Ok(settings) => *SETTINGS.get().unwrap().blocking_lock() = settings,
 						Err(err) => error!("{err}")
 					}
 				}

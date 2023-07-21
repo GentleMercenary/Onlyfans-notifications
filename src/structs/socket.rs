@@ -107,7 +107,7 @@ impl Message {
 				let content = client.get_post(msg.id).await?;
 				
 				let handle = handle(&content.author, &content, client);
-				if SETTINGS.wait().lock().await.should_like::<content::Post>(&content.author.username) {
+				if SETTINGS.get().unwrap().lock().await.should_like::<content::Post>(&content.author.username) {
 					join(handle, client.like_post(&content)).await.0
 				} else {
 					handle.await
@@ -117,7 +117,7 @@ impl Message {
 				info!("Chat message received: {:?}", msg);
 
 				let handle = handle(&msg.from_user, &msg.content, client);
-				if SETTINGS.wait().lock().await.should_like::<content::Message>(&msg.from_user.username) {
+				if SETTINGS.get().unwrap().lock().await.should_like::<content::Message>(&msg.from_user.username) {
 					join(handle, client.like_message(&msg.content)).await.0
 				} else {
 					handle.await
@@ -129,7 +129,7 @@ impl Message {
 					let user = client.get_user(story.user_id).await?;
 
 					let handle = handle(&user, &story.content, client);
-					if SETTINGS.wait().lock().await.should_like::<content::Story>(&user.username) {
+					if SETTINGS.get().unwrap().lock().await.should_like::<content::Story>(&user.username) {
 						join(handle, client.like_story(&story.content)).await.0
 					} else {
 						handle.await
@@ -171,16 +171,16 @@ async fn create_notification<T: content::Content>(content: &T, client: &OFClient
 		});
 
 	if let Some(thumb) = thumb {
-		let (_, thumb) = client.fetch_file(thumb, TEMPDIR.wait().path(), None).await?;
+		let (_, thumb) = client.fetch_file(thumb, TEMPDIR.get().unwrap().path(), None).await?;
 		toast.image(2, Image::new_local(thumb)?);
 	}
 
-	MANAGER.wait().show(&toast)?;
+	MANAGER.get().unwrap().show(&toast)?;
 	Ok(())
 }
 
 async fn handle<T: content::Content>(user: &User, content: &T, client: &OFClient<Authorized>) -> anyhow::Result<()> {
-	let settings = SETTINGS.wait().lock().await;
+	let settings = SETTINGS.get().unwrap().lock().await;
 
 	let username = &user.username;
 	let path = Path::new("data")
