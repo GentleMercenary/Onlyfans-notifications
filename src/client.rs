@@ -186,7 +186,7 @@ impl OFClient<Authorized> {
 		})
 		.ok_or_else(|| anyhow!("Filename unknown"))?;
 	
-		let (filename, extension) = filename.rsplit_once('.').expect("Split extension from filename");
+		let (filename, extension) = filename.rsplit_once('.').context("File has no extension")?;
 		let final_path = path.join(filename).with_extension(extension);
 	
 		if !final_path.exists() {

@@ -13,7 +13,7 @@ extern crate simplelog;
 
 use crate::structs::user;
 
-use tokio::select;
+use tokio::{select, sync::{Mutex, Notify}};
 use chrono::Local;
 mod websocket_client;
 use tempdir::TempDir;
@@ -31,21 +31,34 @@ use tao::{event_loop::{EventLoop, ControlFlow, EventLoopProxy}, window::Icon, sy
 
 
 static MANAGER: OnceCell<ToastManager> = OnceCell::new();
-static SETTINGS: OnceCell<Settings> = OnceCell::new();
+static SETTINGS: OnceCell<Mutex<Settings>> = OnceCell::new();
 static TEMPDIR: OnceCell<TempDir> = OnceCell::new();
 
-fn init() {
+fn init() -> anyhow::Result<()> {
 	let aum_id = "OFNotifier";
-	let icon_path = Path::new("icons").join("icon.ico").canonicalize().expect("Found icon file");
-	register(aum_id, "OF notifier", Some(icon_path.as_path())).expect("Registered application");
+	let icon_path = Path::new("icons").join("icon.ico").canonicalize()
+		.inspect_err(|err| error!("{err}"))?;
+
+	register(aum_id, "OF notifier", Some(icon_path.as_path()))
+	.inspect_err(|err| error!("{err}"))?;
 	
-	MANAGER
+	let _ = MANAGER
 	.set(ToastManager::new(aum_id))
-	.expect("Global toast manager set");
+	.inspect_err(|_| error!("toast manager set"));
 
 	TempDir::new("OF_thumbs")
 	.and_then(|dir| TEMPDIR.set(dir).map_err(|_| Error::new(ErrorKind::Other, "OnceCell couldn't set")))
-	.expect("Temporary thumbnail created succesfully");
+	.inspect_err(|err| error!("{err}"))?;
+
+	Ok(())
+}
+
+fn get_settings() -> anyhow::Result<Settings> {
+	fs::read_to_string("settings.json")
+	.inspect_err(|err| error!("Error reading settings.json: {}", err))
+	.and_then(|s| serde_json::from_str::<Settings>(&s).map_err(Into::into))
+	.inspect_err(|err| error!("Error parsing settings: {}", err))
+	.map_err(Into::into)
 }
 
 fn get_auth_params() -> anyhow::Result<AuthParams> {
@@ -61,36 +74,40 @@ fn get_auth_params() -> anyhow::Result<AuthParams> {
 	.map_err(Into::into)
 }
 
-async fn make_connection(proxy: EventLoopProxy<Events>, cancel_token: Arc<CancellationToken>) {
-	info!("Fetching authentication parameters");
+async fn make_connection(channel: EventLoopProxy<Events>, cancel_token: Arc<CancellationToken>, signal: Arc<Notify>) {
+	loop {
+		signal.notified().await;
 
-	let cloned_proxy = proxy.clone();
-	let res = futures::future::ready(get_auth_params())
-	.and_then(|params| OFClient::new().authorize(params))
-	.and_then(|client| async move {
-		let me = client.get("https://onlyfans.com/api2/v2/users/me")
-			.and_then(|response| response.json::<user::Me>().map_err(Into::into))
-			.await?;
-		
-		debug!("{:?}", me);
-		info!("Connecting as {}", me.name);
-		let mut socket = websocket_client::WebSocketClient::new()
-			.connect(&me.ws_auth_token, &client).await?;
-
-		cloned_proxy.send_event(Events::Connected)?;
-
-		let res = select! {
-			_ = cancel_token.cancelled() => Ok(()),
-			res = socket.message_loop(client) => res,
-		};
-
-		info!("Terminating websocket");
-		socket.close().await?;
-		res
-	})
-	.await;
-
-	proxy.send_event(Events::Disconnected(res)).expect("Sent disconnect message");
+		info!("Fetching authentication parameters");
+		let cloned_channel = channel.clone();
+		let cloned_token = cancel_token.clone();
+		let res = futures::future::ready(get_auth_params())
+		.and_then(|params| OFClient::new().authorize(params))
+		.and_then(|client| async move {
+			let me = client.get("https://onlyfans.com/api2/v2/users/me")
+				.and_then(|response| response.json::<user::Me>().map_err(Into::into))
+				.await?;
+			
+			debug!("{:?}", me);
+			info!("Connecting as {}", me.name);
+			let mut socket = websocket_client::WebSocketClient::new()
+				.connect(&me.ws_auth_token, &client).await?;
+	
+			cloned_channel.send_event(Events::Connected)?;
+	
+			let res = select! {
+				_ = cloned_token.cancelled() => Ok(()),
+				res = socket.message_loop(client) => res,
+			};
+	
+			info!("Terminating websocket");
+			socket.close().await?;
+			res
+		})
+		.await;
+	
+		channel.send_event(Events::Disconnected(res)).expect("Sent disconnect message");
+	}
 }
 
 #[derive(PartialEq, Eq)]
@@ -99,8 +116,7 @@ enum State { Disconnected, Connected, Connecting, Disconnecting }
 #[derive(Debug)]
 enum Events { Connected, Disconnected(anyhow::Result<()>) }
 
-#[tokio::main]
-async fn main() -> anyhow::Result<()> {
+fn main() -> anyhow::Result<()> {
 	let log_folder = Path::new("logs");
 	fs::create_dir_all(log_folder).expect("Created log directory");
 	let mut log_path = log_folder.join(Local::now().format("%Y%m%d_%H%M%S").to_string());
@@ -113,17 +129,10 @@ async fn main() -> anyhow::Result<()> {
 		]
 	)?;
 
-	init();
+	init()?;
 
-	let s = fs::read_to_string("settings.json")
-		.inspect_err(|err| error!("Error reading settings.json: {}", err))?;
-
-	SETTINGS
-		.set(
-			serde_json::from_str::<Settings>(&s)
-				.inspect_err(|err| error!("Error parsing settings: {}", err))?,
-		)
-		.expect("Settings read properly");
+	SETTINGS.set(Mutex::new(get_settings()?))
+	.expect("Settings read properly");
 
 	let event_loop = EventLoop::<Events>::with_user_event();
 	let proxy = event_loop.create_proxy();
@@ -150,7 +159,8 @@ async fn main() -> anyhow::Result<()> {
 
 	let mut tray_menu = ContextMenu::new();
 
-	let clear_id = tray_menu.add_item(MenuItemAttributes::new("Clear notifications")).id();	
+	let clear_id = tray_menu.add_item(MenuItemAttributes::new("Clear notifications")).id();
+	let reload_id = tray_menu.add_item(MenuItemAttributes::new("Reload settings")).id();
 	let quit_id = tray_menu.add_item(MenuItemAttributes::new("Quit")).id();
 
 	let mut tray_icon = SystemTrayBuilder::new(second_icon.clone(), Some(tray_menu))
@@ -158,10 +168,17 @@ async fn main() -> anyhow::Result<()> {
 		.build(&event_loop)?;
 
 	let mut cancel_token = Arc::new(CancellationToken::new());
+	let signal = Arc::new(Notify::new());
+	let runtime = tokio::runtime::Builder::new_multi_thread()
+	.enable_all()
+	.build()
+	.unwrap();
 	
 	info!("Connecting");
 	let mut state = State::Connecting;
-	tokio::spawn(make_connection(proxy.clone(), cancel_token.clone()));
+	runtime.spawn(make_connection(proxy, cancel_token.clone(), signal.clone()));
+	signal.notify_one();
+
 	event_loop.run(move |event, _, control_flow| {
 		*control_flow = ControlFlow::Wait;
 		let _ = tray_icon;
@@ -175,9 +192,9 @@ async fn main() -> anyhow::Result<()> {
 				}
 				Events::Disconnected(reason) => {
 					if let Err(err) = reason {
-						if SETTINGS.wait().reconnect && err.root_cause().is::<websocket_client::TimeoutExpired>() {
+						if SETTINGS.wait().blocking_lock().reconnect && err.root_cause().is::<websocket_client::TimeoutExpired>() {
 							warn!("Timeout expired");
-							tokio::spawn(make_connection(proxy.clone(), cancel_token.clone()));
+							signal.notify_one();
 							return;
 						}
 
@@ -189,7 +206,9 @@ async fn main() -> anyhow::Result<()> {
 						.text2("An error occurred, disconnecting")
 						.duration(ToastDuration::Long);
 				
-						MANAGER.wait().show(&toast).expect("Showed error notification");
+						MANAGER.wait().show(&toast)
+						.inspect_err(|err| error!("{err}"))
+						.unwrap();
 					}
 
 					tray_icon.set_icon(second_icon.clone());
@@ -209,7 +228,7 @@ async fn main() -> anyhow::Result<()> {
 							cancel_token = Arc::new(CancellationToken::new());
 							info!("Connecting");
 							state = State::Connecting;
-							tokio::spawn(make_connection(proxy.clone(), cancel_token.clone()));
+							signal.notify_one();
 						},
 						_ => ()
 					}
@@ -219,10 +238,21 @@ async fn main() -> anyhow::Result<()> {
 				if menu_id == quit_id {
 					info!("Closing application");
 					cancel_token.cancel();
-					MANAGER.wait().clear().expect("Cleared notifications");
+					MANAGER.wait().clear()
+					.inspect_err(|err| error!("{err}"))
+					.unwrap();
+
 					*control_flow = ControlFlow::Exit;
 				} else if menu_id == clear_id {
-					MANAGER.wait().clear().expect("Cleared notifications");
+					MANAGER.wait().clear()
+					.inspect_err(|err| error!("{err}"))
+					.unwrap();
+				} else if menu_id == reload_id {
+					debug!("Reloading settings");
+					match get_settings() {
+						Ok(settings) => *SETTINGS.wait().blocking_lock() = settings,
+						Err(err) => error!("{err}")
+					}
 				}
 			},
 			_ => {}

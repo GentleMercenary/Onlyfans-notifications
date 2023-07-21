@@ -1,8 +1,10 @@
 use crate::{client::{Authorized, OFClient}, deserializers::de_markdown_string};
 
-use std::fmt;
+use std::{fmt, path::{PathBuf, Path}};
+use reqwest::Url;
 use serde::Deserialize;
 use futures_util::{TryFutureExt, future::try_join_all};
+use anyhow::anyhow;
 
 #[derive(Deserialize, Debug)]
 #[serde(rename_all = "camelCase")]
@@ -21,6 +23,36 @@ pub struct User {
 	pub name: String,
 	pub username: String,
 	pub avatar: Option<String>,
+}
+
+impl User {
+	pub async fn download_avatar(&self, client: &OFClient<Authorized>) -> anyhow::Result<Option<PathBuf>> {
+		if let Some(avatar) = &self.avatar {
+			let avatar_url = avatar.parse::<Url>()?;
+			let filename = avatar_url
+				.path_segments()
+				.and_then(|segments| {
+					let mut reverse_iter = segments.rev();
+					let ext = reverse_iter.next().and_then(|file| file.split('.').last());
+					let filename = reverse_iter.next();
+		
+					Option::zip(filename, ext).map(|(filename, ext)| [filename, ext].join("."))
+				})
+				.ok_or_else(|| anyhow!("Filename unknown"))?;
+		
+			let mut user_path = Path::new("data").join(&self.username);
+			std::fs::create_dir_all(&user_path)?;
+			user_path = user_path.canonicalize()?;
+		
+			let (_, avatar) = client.fetch_file(
+					avatar,
+					&user_path.join("Profile").join("Avatars"),
+					Some(&filename),
+				)
+				.await?;
+			Ok(Some(avatar))
+		} else { Ok(None) }
+	}
 }
 
 #[derive(Deserialize, Debug)]

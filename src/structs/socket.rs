@@ -3,9 +3,8 @@ use crate::client::{OFClient, Authorized};
 use crate::deserializers::notification_message;
 use crate::structs::{content, user::User, media::{download_media, Media}};
 
-use reqwest::Url;
 use std::path::Path;
-use anyhow::{anyhow, bail};
+use anyhow::bail;
 use serde::Deserialize;
 use futures::future::{join, join_all};
 use winrt_toast::{content::image::{ImageHintCrop, ImagePlacement}, Header, Image, Toast};
@@ -113,7 +112,7 @@ impl Message {
 				let content = client.get_post(msg.id).await?;
 				
 				let handle = handle(&content.author, &content, client);
-				if SETTINGS.wait().should_like::<content::Post>(&content.author.username) {
+				if SETTINGS.wait().lock().await.should_like::<content::Post>(&content.author.username) {
 					join(handle, client.like_post(&content)).await.0
 				} else {
 					handle.await
@@ -123,7 +122,7 @@ impl Message {
 				info!("Chat message received: {:?}", msg);
 
 				let handle = handle(&msg.from_user, &msg.content, client);
-				if SETTINGS.wait().should_like::<content::Message>(&msg.from_user.username) {
+				if SETTINGS.wait().lock().await.should_like::<content::Message>(&msg.from_user.username) {
 					join(handle, client.like_message(&msg.content)).await.0
 				} else {
 					handle.await
@@ -135,7 +134,7 @@ impl Message {
 					let user = client.get_user(story.user_id).await?;
 
 					let handle = handle(&user, &story.content, client);
-					if SETTINGS.wait().should_like::<content::Story>(&user.username) {
+					if SETTINGS.wait().lock().await.should_like::<content::Story>(&user.username) {
 						join(handle, client.like_story(&story.content)).await.0
 					} else {
 						handle.await
@@ -161,30 +160,7 @@ async fn create_notification<T: content::Content>(content: &T, client: &OFClient
 	.header(Header::new(header, header, ""))
 	.text1(&user.name);
 
-	if let Some(avatar) = &user.avatar {
-		let avatar_url = avatar.parse::<Url>()?;
-		let avatar_filename = avatar_url
-			.path_segments()
-			.and_then(|segments| {
-				let mut reverse_iter = segments.rev();
-				let ext = reverse_iter.next().and_then(|file| file.split('.').last());
-				let filename = reverse_iter.next();
-	
-				Option::zip(filename, ext).map(|(filename, ext)| [filename, ext].join("."))
-			})
-			.ok_or_else(|| anyhow!("Filename unknown"))?;
-	
-		let mut user_path = Path::new("data").join(&user.username);
-		std::fs::create_dir_all(&user_path)?;
-		user_path = user_path.canonicalize()?;
-	
-		let (_, avatar) = client.fetch_file(
-				avatar,
-				&user_path.join("Profile").join("Avatars"),
-				Some(&avatar_filename),
-			)
-			.await?;
-
+	if let Some(avatar) = user.download_avatar(client).await? {
 		toast.image(1,
 			Image::new_local(avatar)?
 			.with_hint_crop(ImageHintCrop::Circle)
@@ -209,7 +185,7 @@ async fn create_notification<T: content::Content>(content: &T, client: &OFClient
 }
 
 async fn handle<T: content::Content>(user: &User, content: &T, client: &OFClient<Authorized>) -> anyhow::Result<()> {
-	let settings = SETTINGS.wait();
+	let settings = SETTINGS.wait().lock().await;
 
 	let username = &user.username;
 	let path = Path::new("data")
@@ -249,19 +225,20 @@ mod tests {
 	use std::thread::sleep;
 	use log::LevelFilter;
 	use simplelog::{TermLogger, TerminalMode, Config, ColorChoice};
+	use tokio::sync::Mutex;
 	use std::time::Duration;
 
 	static INIT: Once = Once::new();
 
 	fn test_init() {
 		INIT.call_once(|| {
-			init();
+			init().unwrap();
 
 			SETTINGS
-			.set(Settings {
+			.set(Mutex::new(Settings {
 				notify: Whitelist::Global(GlobalSelection::Full(true)),
 				..Settings::default()
-			})
+			}))
 			.unwrap();
 	
 			TermLogger::init(
