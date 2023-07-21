@@ -95,7 +95,7 @@ impl WebSocketClient<Connected> {
 		Ok(())
 	}
 
-	pub async fn message_loop(&mut self, client: OFClient<Authorized>) -> anyhow::Result<()> {
+	pub async fn message_loop(&mut self, client: &OFClient<Authorized>) -> anyhow::Result<()> {
 		info!("Starting websocket message loop");
 		let mut interval = tokio::time::interval(Duration::from_secs(20));
 		let mut activity = tokio::time::interval(Duration::from_secs(300)); // Experimentally determined
@@ -118,7 +118,7 @@ impl WebSocketClient<Connected> {
 								debug!("Heartbeat acknowledged: {msg:?}");
 								heartbeat_flight = false;
 							}
-							msg.handle_message(&client).await?;
+							msg.handle_message(client).await?;
 						},
 						Ok(None) => {},
 						Err(err) => return Err(err),

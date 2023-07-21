@@ -14,6 +14,8 @@ extern crate simplelog;
 use crate::structs::user;
 
 use tokio::{select, sync::{Mutex, Notify}};
+use tokio_tungstenite::tungstenite::error::Error as ws_error;
+use tokio_tungstenite::tungstenite::error::ProtocolError as protocol_error;
 use chrono::Local;
 mod websocket_client;
 use tempdir::TempDir;
@@ -89,17 +91,27 @@ async fn make_connection(channel: EventLoopProxy<Events>, cancel_token: Arc<Canc
 				.await?;
 			
 			debug!("{:?}", me);
-			info!("Connecting as {}", me.name);
-			let mut socket = websocket_client::WebSocketClient::new()
-				.connect(&me.ws_auth_token, &client).await?;
-	
-			cloned_channel.send_event(Events::Connected)?;
-	
-			let res = select! {
-				_ = cloned_token.cancelled() => Ok(()),
-				res = socket.message_loop(client) => res,
+			let (socket, res) = loop {
+				info!("Connecting as {}", me.name);
+				let mut socket = websocket_client::WebSocketClient::new()
+					.connect(&me.ws_auth_token, &client).await?;
+		
+				cloned_channel.send_event(Events::Connected)?;
+		
+				let res = select! {
+					_ = cloned_token.cancelled() => Ok(()),
+					res = socket.message_loop(&client) => res,
+				};
+
+				if SETTINGS.wait().lock().await.reconnect && let Err(err) = &res {
+					error!("{err}");
+					if let Some(ws_error::Protocol(protocol_error::ResetWithoutClosingHandshake)) = err.downcast_ref::<ws_error>() {
+							continue;
+					}
+				} 
+				break (socket, res);
 			};
-	
+
 			info!("Terminating websocket");
 			socket.close().await?;
 			res

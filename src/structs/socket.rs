@@ -91,11 +91,6 @@ impl Message {
 		return match self {
 			Self::Connected(msg) => {
 				info!("Connected message received: {:?}", msg);
-
-				let mut toast = Toast::new();
-				toast.text1("OF Notifier").text2("Connection established");
-
-				MANAGER.wait().show(&toast)?;
 				Ok(())
 			},
 			Self::Onlines(_) => Ok(()),
