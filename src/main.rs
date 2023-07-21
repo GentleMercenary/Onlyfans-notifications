@@ -13,7 +13,8 @@ extern crate simplelog;
 
 use crate::structs::user;
 
-use tokio::{select, sync::{Mutex, Notify}};
+use anyhow::anyhow;
+use tokio::{select, sync::{Mutex, watch::{Receiver, channel}}};
 use tokio_tungstenite::tungstenite::error::Error as ws_error;
 use tokio_tungstenite::tungstenite::error::ProtocolError as protocol_error;
 use chrono::Local;
@@ -26,7 +27,7 @@ use client::{OFClient, AuthParams};
 use image::io::Reader as ImageReader;
 use cached::once_cell::sync::OnceCell;
 use winrt_toast::{Toast, ToastManager, ToastDuration, register};
-use std::{fs::{self, File}, path::Path, sync::Arc, io::{Error, ErrorKind}};
+use std::{fs::{self, File}, path::Path, io::{Error, ErrorKind}};
 use simplelog::{Config, LevelFilter, WriteLogger, TermLogger,TerminalMode, CombinedLogger, ColorChoice};
 use tao::{event_loop::{EventLoop, ControlFlow, EventLoopProxy}, window::Icon, system_tray::SystemTrayBuilder, menu::{ContextMenu, MenuItemAttributes}, event::{Event, TrayEvent}};
 
@@ -75,13 +76,15 @@ fn get_auth_params() -> anyhow::Result<AuthParams> {
 	.map_err(Into::into)
 }
 
-async fn make_connection(channel: EventLoopProxy<Events>, cancel: Arc<Notify>, start: Arc<Notify>) {
+async fn make_connection(channel: EventLoopProxy<Events>, state: Receiver<State>) {
 	loop {
-		start.notified().await;
+		let mut cloned_state = state.clone();
+		if cloned_state.wait_for(|state| matches!(state, State::Connecting)).await.is_err() {
+			break;
+		}
 		
 		info!("Fetching authentication parameters");
 		let cloned_channel = channel.clone();
-		let cloned_cancel = cancel.clone();
 		let res = futures::future::ready(get_auth_params())
 		.and_then(|params| OFClient::new().authorize(params))
 		.and_then(|client| async move {
@@ -98,7 +101,7 @@ async fn make_connection(channel: EventLoopProxy<Events>, cancel: Arc<Notify>, s
 				cloned_channel.send_event(Events::Connected)?;
 		
 				let res = select! {
-					_ = cloned_cancel.notified() => Ok(()),
+					_ = cloned_state.wait_for(|state| matches!(state, State::Disconnecting)) => Ok(()),
 					res = socket.message_loop(&client) => res,
 				};
 
@@ -119,9 +122,10 @@ async fn make_connection(channel: EventLoopProxy<Events>, cancel: Arc<Notify>, s
 	
 		channel.send_event(Events::Disconnected(res)).expect("Sent disconnect message");
 	}
+	channel.send_event(Events::Disconnected(Err(anyhow!("This should be unreachable")))).expect("Sent disconnect message");
 }
 
-#[derive(PartialEq, Eq)]
+#[derive(Debug, PartialEq, Eq, Clone)]
 enum State { Disconnected, Connected, Connecting, Disconnecting }
 
 #[derive(Debug)]
@@ -178,17 +182,15 @@ fn main() -> anyhow::Result<()> {
 		.with_tooltip("OF notifier")
 		.build(&event_loop)?;
 
-	let cancel = Arc::new(Notify::new());
-	let start = Arc::new(Notify::new());
+	let (state, rx) = channel(State::Disconnected);
 	let runtime = tokio::runtime::Builder::new_multi_thread()
 	.enable_all()
 	.build()
 	.unwrap();
 	
 	info!("Connecting");
-	let mut state = State::Connecting;
-	runtime.spawn(make_connection(proxy, cancel.clone(), start.clone()));
-	start.notify_one();
+	runtime.spawn(make_connection(proxy, rx));
+	state.send_replace(State::Connecting);
 
 	event_loop.run(move |event, _, control_flow| {
 		*control_flow = ControlFlow::Wait;
@@ -198,19 +200,19 @@ fn main() -> anyhow::Result<()> {
 			Event::UserEvent(e) => match e {
 				Events::Connected => {
 					tray_icon.set_icon(first_icon.clone());
-					state = State::Connected;
+					state.send_replace(State::Connected);
 					info!("Connected");
 				}
 				Events::Disconnected(reason) => {
 					if let Err(err) = reason {
 						if SETTINGS.wait().blocking_lock().reconnect && err.root_cause().is::<websocket_client::TimeoutExpired>() {
 							warn!("Timeout expired");
-							start.notify_one();
+							state.send_replace(State::Connecting);
 							return;
 						}
 
 						error!("Unexpected termination: {:?}", err);
-				
+
 						let mut toast = Toast::new();
 						toast
 						.text1("OF Notifier")
@@ -223,22 +225,22 @@ fn main() -> anyhow::Result<()> {
 					}
 
 					tray_icon.set_icon(second_icon.clone());
-					state = State::Disconnected;
+					state.send_replace(State::Disconnected);
 					info!("Disconnected");
 				}
 			},
 			Event::TrayEvent {event, ..} => {
 				if event == TrayEvent::LeftClick {
-					match state {
+					let _state = state.borrow().clone();
+					match _state {
 						State::Connected => {
 							info!("Disconnecting");
-							state = State::Disconnecting;
-							cancel.notify_one();
+							state.send_replace(State::Disconnecting);
+							info!("A");
 						},
 						State::Disconnected => {
 							info!("Connecting");
-							state = State::Connecting;
-							start.notify_one();
+							state.send_replace(State::Connecting);
 						},
 						_ => ()
 					}
@@ -247,10 +249,12 @@ fn main() -> anyhow::Result<()> {
 			Event::MenuEvent { menu_id, .. } => {
 				if menu_id == quit_id {
 					info!("Closing application");
-					cancel.notify_one();
+					state.send_replace(State::Disconnecting);
 					MANAGER.wait().clear()
 					.inspect_err(|err| error!("{err}"))
 					.unwrap();
+
+					state.send_replace(State::Disconnected);
 
 					*control_flow = ControlFlow::Exit;
 				} else if menu_id == clear_id {
