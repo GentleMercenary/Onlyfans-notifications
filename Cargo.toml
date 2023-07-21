@@ -13,13 +13,11 @@ log = "0.4.17"
 simplelog = "0.12.0"
 
 image = "0.24.6"
-tao = { version = "0.20.0", features = ["tray"] }
+tao = { version = "0.21.0", features = ["tray"] }
 winrt-toast = "0.1.1"
 
-tokio = { version = "1.20.0", features = ["full"] }
-tokio-util = "0.7.3"
-tokio-retry = "0.3.0"
-tokio-tungstenite = { version = "0.17.2", features = ["native-tls"] }
+tokio = { version = "1.29.0", features = ["full"] }
+tokio-tungstenite = { version = "0.19.0", features = ["native-tls"] }
 futures = "0.3.21"
 futures-util = "0.3.21"
 
@@ -30,7 +28,7 @@ serde = { version = "1.0.140", features = ["derive"] }
 rand = "0.8.5"
 rust-crypto = "0.2.36"
 
-cached = "0.38.0"
+cached = "0.44.0"
 chrono = "0.4.19"
 tempdir = "0.3.7"
 filetime = "0.2.17"
