@@ -75,13 +75,13 @@ fn get_auth_params() -> anyhow::Result<AuthParams> {
 	.map_err(Into::into)
 }
 
-async fn make_connection(channel: EventLoopProxy<Events>, state: Receiver<State>) {
+async fn make_connection(channel: EventLoopProxy<Events>, mut state: Receiver<State>) {
 	loop {
+		if state.wait_for(|state| matches!(state, State::Connecting)).await.is_err() {
+				break;
+			}
+			
 		let mut cloned_state = state.clone();
-		if cloned_state.wait_for(|state| matches!(state, State::Connecting)).await.is_err() {
-			break;
-		}
-		
 		info!("Reading authentication parameters");
 		let cloned_channel = channel.clone();
 		let res = futures::future::ready(get_auth_params())
@@ -99,6 +99,9 @@ async fn make_connection(channel: EventLoopProxy<Events>, state: Receiver<State>
 					.connect(&me.ws_auth_token, &client).await?;
 		
 				cloned_channel.send_event(Events::Connected)?;
+				if cloned_state.wait_for(|state| matches!(state, State::Connected)).await.is_err() {
+					break (socket, Err(anyhow!("Channel is closed")));
+				}
 		
 				let res = select! {
 					_ = cloned_state.wait_for(|state| matches!(state, State::Disconnecting)) => Ok(()),
@@ -121,8 +124,10 @@ async fn make_connection(channel: EventLoopProxy<Events>, state: Receiver<State>
 		.await;
 	
 		channel.send_event(Events::Disconnected(res)).expect("Sent disconnect message");
+		if state.wait_for(|state| matches!(state, State::Disconnected)).await.is_err() {
+			break;
+		}
 	}
-	channel.send_event(Events::Disconnected(Err(anyhow!("This should be unreachable")))).expect("Sent disconnect message");
 }
 
 #[derive(Debug, PartialEq, Eq, Clone)]
@@ -193,14 +198,15 @@ fn main() -> anyhow::Result<()> {
 		match event {
 			Event::UserEvent(e) => match e {
 				Events::Connected => {
-					tray_icon.set_icon(first_icon.clone());
 					state.send_replace(State::Connected);
+					tray_icon.set_icon(first_icon.clone());
 					info!("Connected");
 				}
 				Events::Disconnected(reason) => {
+					state.send_replace(State::Disconnected);
 					if let Err(err) = reason {
 						if SETTINGS.get().unwrap().blocking_lock().reconnect && err.root_cause().is::<websocket_client::TimeoutExpired>() {
-							warn!("Timeout expired");
+							error!("Timeout expired");
 							state.send_replace(State::Connecting);
 							return;
 						}
@@ -219,7 +225,6 @@ fn main() -> anyhow::Result<()> {
 					}
 
 					tray_icon.set_icon(second_icon.clone());
-					state.send_replace(State::Disconnected);
 					info!("Disconnected");
 				}
 			},
@@ -228,12 +233,12 @@ fn main() -> anyhow::Result<()> {
 					let _state = state.borrow().clone();
 					match _state {
 						State::Connected => {
-							info!("Disconnecting");
 							state.send_replace(State::Disconnecting);
+							info!("Disconnecting");
 						},
 						State::Disconnected => {
-							info!("Connecting");
 							state.send_replace(State::Connecting);
+							info!("Connecting");
 						},
 						_ => ()
 					}
@@ -241,8 +246,8 @@ fn main() -> anyhow::Result<()> {
 			},
 			Event::MenuEvent { menu_id, .. } => {
 				if menu_id == quit_id {
-					info!("Closing application");
 					state.send_replace(State::Disconnecting);
+					info!("Closing application");
 					MANAGER.get().unwrap().clear()
 					.inspect_err(|err| error!("{err}"))
 					.unwrap();
@@ -255,9 +260,12 @@ fn main() -> anyhow::Result<()> {
 					.inspect_err(|err| error!("{err}"))
 					.unwrap();
 				} else if menu_id == reload_id {
-					debug!("Reloading settings");
+					info!("Reloading settings");
 					match get_settings() {
-						Ok(settings) => *SETTINGS.get().unwrap().blocking_lock() = settings,
+						Ok(settings) => {
+							*SETTINGS.get().unwrap().blocking_lock() = settings;
+							info!("Successfully updated settings")
+						},
 						Err(err) => error!("{err}")
 					}
 				}
