@@ -24,7 +24,7 @@ pub struct Post {
 
 #[derive(Deserialize, Debug)]
 #[serde(rename_all = "camelCase")]
-pub struct Message {
+pub struct Chat {
 	pub id: u64,
 	#[serde(deserialize_with = "de_markdown_string")]
 	text: String,
@@ -32,7 +32,7 @@ pub struct Message {
 	#[serde(default = "Utc::now")]
 	#[serde(deserialize_with = "str_to_date")]
 	posted_at: DateTime<Utc>,
-	media: Vec<media::Message>,
+	media: Vec<media::Chat>,
 }
 
 #[derive(Deserialize, Debug)]
@@ -97,8 +97,8 @@ impl Content for Post {
 	}
 }
 
-impl Content for Message {
-	type Media = media::Message;
+impl Content for Chat {
+	type Media = media::Chat;
 
 	fn header() -> &'static str { "Messages" }
 	fn media(&self) -> Option<&[Self::Media]> { Some(&self.media) }
@@ -174,7 +174,7 @@ impl OFClient<Authorized> {
 		.map(|_| ())
 	}
 	
-	pub async fn like_message(&self, message: &Message) -> anyhow::Result<()> {
+	pub async fn like_message(&self, message: &Chat) -> anyhow::Result<()> {
 		let message_id = message.id;
 
 		self.post(&format!("https://onlyfans.com/api2/v2/messages/{message_id}/like"), None as Option<&String>)

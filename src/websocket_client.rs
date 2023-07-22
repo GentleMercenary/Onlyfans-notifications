@@ -1,7 +1,8 @@
-use crate::{client::{OFClient, Authorized}, structs::socket};
+use crate::{client::{OFClient, Authorized}, structs::{socket, ClickStats}};
 
 use anyhow::bail;
-use serde::Serialize;
+use rand::{rngs::StdRng, SeedableRng, Rng};
+use rand_distr::Exp1;
 use std::time::Duration;
 use futures::TryFutureExt;
 use tokio::{net::TcpStream, time::timeout};
@@ -30,18 +31,6 @@ impl TryFrom<Message> for socket::Message {
 	}
 }
 
-#[derive(Serialize, Debug)]
-pub struct Connect<'a> {
-	pub act: &'static str,
-	pub token: &'a str,
-}
-
-#[derive(Serialize, Debug)]
-pub struct Heartbeat<'a> {
-	pub act: &'static str,
-	pub ids: &'a [u64],
-}
-
 pub struct Disconnected;
 pub struct Connected {
 	sink: SplitSink<WebSocketStream<MaybeTlsStream<TcpStream>>, Message>,
@@ -59,7 +48,7 @@ impl WebSocketClient {
 }
 
 impl WebSocketClient<Disconnected> {
-	pub async fn connect(&mut self, token: &str, client: &OFClient<Authorized>) -> anyhow::Result<WebSocketClient<Connected>> {
+	pub async fn connect(self, token: &str, client: &OFClient<Authorized>) -> anyhow::Result<WebSocketClient<Connected>> {
 		info!("Creating websocket");
 		let (socket, _) = connect_async("wss://ws2.onlyfans.com/ws2/").await?;
 		info!("Websocket created");
@@ -72,7 +61,7 @@ impl WebSocketClient<Disconnected> {
 
 		info!("Sending connect message");
 		connected_client.connection.sink
-		.send(serde_json::to_vec(&Connect { act: "connect", token })?.into())
+		.send(serde_json::to_vec(&socket::Connect { act: "connect", token })?.into())
 		.await?;
 
 		connected_client
@@ -98,14 +87,22 @@ impl WebSocketClient<Connected> {
 	pub async fn message_loop(&mut self, client: &OFClient<Authorized>) -> anyhow::Result<()> {
 		info!("Starting websocket message loop");
 		let mut interval = tokio::time::interval(Duration::from_secs(20));
-		let mut activity = tokio::time::interval(Duration::from_secs(300)); // Experimentally determined
 		let mut heartbeat_flight = false;
+		let rng = StdRng::from_entropy();
+		let mut activity_interval = rng.sample_iter(Exp1).map(|v: f32| Duration::from_secs_f32(v * 60.0));
+		let mut activity = tokio::time::interval(activity_interval.next().unwrap());
+		activity.tick().await;
 
 		loop {
 			tokio::select! {
 				_ = activity.tick() => {
-					debug!("Simulating site activity: sending click-stats");
-					client.click_stats().await?;
+					let click = rand::random::<ClickStats>();
+					debug!("Simulating site activity: {}", serde_json::to_string(&click)?);
+					if let Err(err) = client.post("https://onlyfans.com/api2/v2/users/clicks-stats", Some(&click)).await {
+						warn!("{err:?}");
+					}
+					activity = tokio::time::interval(activity_interval.next().unwrap());
+					activity.tick().await;
 				},
 				_ = interval.tick() => {
 					self.send_heartbeat().await?;
@@ -129,7 +126,7 @@ impl WebSocketClient<Connected> {
 	}
 
 	async fn send_heartbeat(&mut self) -> anyhow::Result<()> {
-		const HEARTBEAT: Heartbeat = Heartbeat { act: "get_onlines", ids: &[] };
+		const HEARTBEAT: socket::Heartbeat = socket::Heartbeat { act: "get_onlines", ids: &[] };
 
 		debug!("Sending heartbeat: {HEARTBEAT:?}");
 		self.connection.sink

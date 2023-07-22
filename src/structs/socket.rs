@@ -5,9 +5,21 @@ use crate::structs::{content, user::User, media::{download_media, Media}};
 
 use std::path::Path;
 use anyhow::bail;
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 use futures::future::{join, join_all};
 use winrt_toast::{content::image::{ImageHintCrop, ImagePlacement}, Header, Image, Toast};
+
+#[derive(Serialize, Debug)]
+pub struct Connect<'a> {
+	pub act: &'static str,
+	pub token: &'a str,
+}
+
+#[derive(Serialize, Debug)]
+pub struct Heartbeat<'a> {
+	pub act: &'static str,
+	pub ids: &'a [u64],
+}
 
 #[derive(Deserialize, Debug)]
 pub struct Onlines {
@@ -36,7 +48,7 @@ pub struct PostPublished {
 pub struct Chat {
 	from_user: User,
 	#[serde(flatten)]
-	content: content::Message,
+	content: content::Chat,
 }
 
 #[derive(Deserialize, Debug)]
@@ -117,7 +129,7 @@ impl Message {
 				info!("Chat message received: {:?}", msg);
 
 				let handle = handle(&msg.from_user, &msg.content, client);
-				if SETTINGS.get().unwrap().lock().await.should_like::<content::Message>(&msg.from_user.username) {
+				if SETTINGS.get().unwrap().lock().await.should_like::<content::Chat>(&msg.from_user.username) {
 					join(handle, client.like_message(&msg.content)).await.0
 				} else {
 					handle.await

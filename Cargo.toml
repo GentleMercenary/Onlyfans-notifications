@@ -33,3 +33,4 @@ chrono = "0.4.19"
 tempdir = "0.3.7"
 filetime = "0.2.17"
 reqwest = { version = "0.11.11", features = ["cookies", "gzip", "json", "stream"] }
+rand_distr = "0.4.3"

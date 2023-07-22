@@ -52,7 +52,7 @@ struct DyanmicRules {
 	checksum_indexes: Vec<i32>,
 }
 
-#[once(time = 1800, result = true, sync_writes = true)]
+#[once(time = 3600, result = true)]
 async fn get_dynamic_rules() -> anyhow::Result<DyanmicRules> {
 	reqwest::get("https://raw.githubusercontent.com/deviint/onlyfans-dynamic-rules/main/dynamicRules.json")
 	.inspect_err(|err| error!("Error getting dynamic rules: {err:?}"))

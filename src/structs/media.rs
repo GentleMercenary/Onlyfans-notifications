@@ -30,7 +30,7 @@ pub struct Post {
 
 #[derive(Deserialize, Debug)]
 #[serde(rename_all = "camelCase")]
-pub struct Message {
+pub struct Chat {
 	id: u64,
 	#[serde(rename = "type")]
 	media_type: MediaType,
@@ -87,7 +87,7 @@ impl Media for Post {
 	fn unix_time(&self) -> i64 { self.created_at.timestamp() }
 }
 
-impl Media for Message {
+impl Media for Chat {
 	fn source(&self) -> Option<&str> { self.src.as_deref() }
 	fn thumbnail(&self) -> Option<&str> { self.preview.as_deref() }
 	fn media_type(&self) -> &MediaType { &self.media_type }

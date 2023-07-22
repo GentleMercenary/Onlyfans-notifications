@@ -78,8 +78,8 @@ fn get_auth_params() -> anyhow::Result<AuthParams> {
 async fn make_connection(channel: EventLoopProxy<Events>, mut state: Receiver<State>) {
 	loop {
 		if state.wait_for(|state| matches!(state, State::Connecting)).await.is_err() {
-				break;
-			}
+			break;
+		}
 			
 		let mut cloned_state = state.clone();
 		info!("Reading authentication parameters");
@@ -88,6 +88,7 @@ async fn make_connection(channel: EventLoopProxy<Events>, mut state: Receiver<St
 		.and_then(|params| OFClient::new().authorize(params))
 		.and_then(|client| async move {
 			info!("Fetching user data");
+			let _ = client.get("https://onlyfans.com/api2/v2/init").await?;
 			let me = client.get("https://onlyfans.com/api2/v2/users/me")
 				.and_then(|response| response.json::<user::Me>().map_err(Into::into))
 				.await?;
@@ -96,24 +97,24 @@ async fn make_connection(channel: EventLoopProxy<Events>, mut state: Receiver<St
 			let (socket, res) = loop {
 				info!("Connecting as {}", me.name);
 				let mut socket = websocket_client::WebSocketClient::new()
-					.connect(&me.ws_auth_token, &client).await?;
-		
+				.connect(&me.ws_auth_token, &client).await?;
+			
 				cloned_channel.send_event(Events::Connected)?;
 				if cloned_state.wait_for(|state| matches!(state, State::Connected)).await.is_err() {
 					break (socket, Err(anyhow!("Channel is closed")));
 				}
-		
+				
 				let res = select! {
 					_ = cloned_state.wait_for(|state| matches!(state, State::Disconnecting)) => Ok(()),
 					res = socket.message_loop(&client) => res,
 				};
-
+				
 				if SETTINGS.get().unwrap().lock().await.reconnect && let Err(err) = &res {
 					error!("{err}");
 					if let Some(ws_error::Protocol(protocol_error::ResetWithoutClosingHandshake)) = err.downcast_ref::<ws_error>() {
-							continue;
+						continue;
 					}
-				} 
+				}
 				break (socket, res);
 			};
 
