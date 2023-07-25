@@ -2,57 +2,23 @@
 #![feature(result_option_inspect)]
 #![feature(let_chains)]
 
-mod client;
-mod structs;
-mod settings;
-mod deserializers;
-
 #[macro_use]
 extern crate log;
 extern crate simplelog;
 
-use crate::structs::user;
+use of_notifier::{self, init, SETTINGS, MANAGER, websocket_client, settings::Settings, get_auth_params};
 
-use anyhow::anyhow;
-use tokio::{select, sync::{Mutex, watch::{Receiver, channel}}};
-use tokio_tungstenite::tungstenite::error::Error as ws_error;
-use tokio_tungstenite::tungstenite::error::ProtocolError as protocol_error;
 use chrono::Local;
-mod websocket_client;
-use tempdir::TempDir;
-use settings::Settings;
-use serde::Deserialize;
-use futures::TryFutureExt;
-use client::{OFClient, AuthParams};
+use anyhow::anyhow;
+use futures_util::TryFutureExt;
 use image::io::Reader as ImageReader;
-use winrt_toast::{Toast, ToastManager, ToastDuration, register};
-use std::{fs::{self, File}, path::Path, io::{Error, ErrorKind}, sync::OnceLock};
+use of_client::{client::OFClient, user};
+use winrt_toast::{Toast, ToastDuration};
+use std::{fs::{self, File}, path::Path};
+use tokio::{sync::{Mutex, watch::{channel, Receiver}}, select};
 use simplelog::{Config, LevelFilter, WriteLogger, TermLogger,TerminalMode, ColorChoice};
+use tokio_tungstenite::tungstenite::error::{Error as ws_error, ProtocolError as protocol_error};
 use tao::{event_loop::{EventLoop, ControlFlow, EventLoopProxy}, window::Icon, system_tray::SystemTrayBuilder, menu::{ContextMenu, MenuItemAttributes}, event::{Event, TrayEvent}};
-
-
-static MANAGER: OnceLock<ToastManager> = OnceLock::new();
-static SETTINGS: OnceLock<Mutex<Settings>> = OnceLock::new();
-static TEMPDIR: OnceLock<TempDir> = OnceLock::new();
-
-fn init() -> anyhow::Result<()> {
-	let aum_id = "OFNotifier";
-	let icon_path = Path::new("icons").join("icon.ico").canonicalize()
-		.inspect_err(|err| error!("{err}"))?;
-
-	register(aum_id, "OF notifier", Some(icon_path.as_path()))
-	.inspect_err(|err| error!("{err}"))?;
-	
-	let _ = MANAGER
-	.set(ToastManager::new(aum_id))
-	.inspect_err(|_| error!("toast manager set"));
-
-	TempDir::new("OF_thumbs")
-	.and_then(|dir| TEMPDIR.set(dir).map_err(|_| Error::new(ErrorKind::Other, "OnceCell couldn't set")))
-	.inspect_err(|err| error!("{err}"))?;
-
-	Ok(())
-}
 
 fn get_settings() -> anyhow::Result<Settings> {
 	fs::read_to_string("settings.json")
@@ -62,68 +28,64 @@ fn get_settings() -> anyhow::Result<Settings> {
 	.map_err(Into::into)
 }
 
-fn get_auth_params() -> anyhow::Result<AuthParams> {
-	#[derive(Deserialize)]
-	struct _AuthParams { auth: AuthParams }
+pub async fn make_connection(channel: EventLoopProxy<Events>, mut state: Receiver<State>) -> anyhow::Result<()> {
+	info!("Reading authentication parameters");
+	let params = get_auth_params()?;
 
-	fs::read_to_string("auth.json")
-	.inspect_err(|err| error!("Error reading auth file: {err:?}"))
-	.and_then(|data| Ok(serde_json::from_str::<_AuthParams>(&data)?))
-	.inspect_err(|err| error!("Error reading auth data: {err:?}"))
-	.map(|params| params.auth)
-	.inspect(|params| debug!("{params:?}"))
-	.map_err(Into::into)
+	OFClient::new().authorize(params)
+	.and_then(|client| async move {
+		info!("Fetching user data");
+		let _ = client.get("https://onlyfans.com/api2/v2/init").await?;
+		let me = client.get("https://onlyfans.com/api2/v2/users/me")
+			.and_then(|response| response.json::<user::Me>().map_err(Into::into))
+			.await?;
+		
+		debug!("{:?}", me);
+		let (socket, res) = loop {
+			info!("Connecting as {}", me.name);
+			let mut socket = websocket_client::WebSocketClient::new()
+			.connect(&me.ws_auth_token, &client).await?;
+		
+			channel.send_event(Events::Connected)?;
+			if state.wait_for(|state| matches!(state, State::Connected)).await.is_err() {
+				break (socket, Err(anyhow!("Channel is closed")));
+			}
+			
+			let res = select! {
+				_ = state.wait_for(|state| matches!(state, State::Disconnecting)) => Ok(()),
+				res = socket.message_loop(&client) => res,
+			};
+			
+			if SETTINGS.get().unwrap().lock().await.reconnect && let Err(err) = &res {
+				error!("{err}");
+				if let Some(ws_error::Protocol(protocol_error::ResetWithoutClosingHandshake)) = err.downcast_ref::<ws_error>() {
+					continue;
+				}
+			}
+			break (socket, res);
+		};
+
+		info!("Terminating websocket");
+		socket.close().await?;
+		res
+	}).await
 }
 
-async fn make_connection(channel: EventLoopProxy<Events>, mut state: Receiver<State>) {
+pub async fn daemon(channel: EventLoopProxy<Events>, mut state: Receiver<State>) {
 	loop {
 		if state.wait_for(|state| matches!(state, State::Connecting)).await.is_err() {
 			break;
 		}
-			
-		let mut cloned_state = state.clone();
-		info!("Reading authentication parameters");
-		let cloned_channel = channel.clone();
-		let res = futures::future::ready(get_auth_params())
-		.and_then(|params| OFClient::new().authorize(params))
-		.and_then(|client| async move {
-			info!("Fetching user data");
-			let _ = client.get("https://onlyfans.com/api2/v2/init").await?;
-			let me = client.get("https://onlyfans.com/api2/v2/users/me")
-				.and_then(|response| response.json::<user::Me>().map_err(Into::into))
-				.await?;
-			
-			debug!("{:?}", me);
-			let (socket, res) = loop {
-				info!("Connecting as {}", me.name);
-				let mut socket = websocket_client::WebSocketClient::new()
-				.connect(&me.ws_auth_token, &client).await?;
-			
-				cloned_channel.send_event(Events::Connected)?;
-				if cloned_state.wait_for(|state| matches!(state, State::Connected)).await.is_err() {
-					break (socket, Err(anyhow!("Channel is closed")));
-				}
-				
-				let res = select! {
-					_ = cloned_state.wait_for(|state| matches!(state, State::Disconnecting)) => Ok(()),
-					res = socket.message_loop(&client) => res,
-				};
-				
-				if SETTINGS.get().unwrap().lock().await.reconnect && let Err(err) = &res {
-					error!("{err}");
-					if let Some(ws_error::Protocol(protocol_error::ResetWithoutClosingHandshake)) = err.downcast_ref::<ws_error>() {
-						continue;
-					}
-				}
-				break (socket, res);
-			};
 
-			info!("Terminating websocket");
-			socket.close().await?;
-			res
-		})
-		.await;
-	
+		let res = make_connection(channel.clone(), state.clone()).await;
+		if 
+			let Err(err) = &res &&
+			SETTINGS.get().unwrap().blocking_lock().reconnect &&
+			err.root_cause().is::<websocket_client::TimeoutExpired>() {
+				error!("Timeout expired");
+				continue;
+		}
+
 		channel.send_event(Events::Disconnected(res)).expect("Sent disconnect message");
 		if state.wait_for(|state| matches!(state, State::Disconnected)).await.is_err() {
 			break;
@@ -132,20 +94,21 @@ async fn make_connection(channel: EventLoopProxy<Events>, mut state: Receiver<St
 }
 
 #[derive(Debug, PartialEq, Eq, Clone)]
-enum State { Disconnected, Connected, Connecting, Disconnecting }
+pub enum State { Disconnected, Connected, Connecting, Disconnecting }
 
 #[derive(Debug)]
-enum Events { Connected, Disconnected(anyhow::Result<()>) }
+pub enum Events { Connected, Disconnected(anyhow::Result<()>) }
 
 fn main() -> anyhow::Result<()> {
-	let log_folder = Path::new("logs");
-	fs::create_dir_all(log_folder).expect("Created log directory");
-	let mut log_path = log_folder.join(Local::now().format("%Y%m%d_%H%M%S").to_string());
-	log_path.set_extension("log");
-
 	if cfg!(debug_assertions) {
 		TermLogger::init(LevelFilter::Debug, Config::default(), TerminalMode::Mixed, ColorChoice::Auto)?;
 	} else {
+		let log_folder = Path::new("logs");
+		fs::create_dir_all(log_folder).expect("Created log directory");
+		let log_path = log_folder
+			.join(Local::now().format("%Y%m%d_%H%M%S").to_string())
+			.with_extension("log");
+		
 		WriteLogger::init(LevelFilter::Info, Config::default(), File::create(log_path)?)?;
 	}
 
@@ -155,7 +118,6 @@ fn main() -> anyhow::Result<()> {
 	.expect("Settings read properly");
 
 	let event_loop = EventLoop::<Events>::with_user_event();
-	let proxy = event_loop.create_proxy();
 
 	let read_image = |path: &Path| {
 		ImageReader::open(path)
@@ -174,7 +136,6 @@ fn main() -> anyhow::Result<()> {
 
 	let mut tray_menu = ContextMenu::new();
 
-	let clear_id = tray_menu.add_item(MenuItemAttributes::new("Clear notifications")).id();
 	let reload_id = tray_menu.add_item(MenuItemAttributes::new("Reload settings")).id();
 	let quit_id = tray_menu.add_item(MenuItemAttributes::new("Quit")).id();
 
@@ -189,7 +150,7 @@ fn main() -> anyhow::Result<()> {
 	.unwrap();
 	
 	info!("Connecting");
-	runtime.spawn(make_connection(proxy, rx));
+	runtime.spawn(daemon(event_loop.create_proxy(), rx));
 	state.send_replace(State::Connecting);
 
 	event_loop.run(move |event, _, control_flow| {
@@ -206,12 +167,6 @@ fn main() -> anyhow::Result<()> {
 				Events::Disconnected(reason) => {
 					state.send_replace(State::Disconnected);
 					if let Err(err) = reason {
-						if SETTINGS.get().unwrap().blocking_lock().reconnect && err.root_cause().is::<websocket_client::TimeoutExpired>() {
-							error!("Timeout expired");
-							state.send_replace(State::Connecting);
-							return;
-						}
-
 						error!("Unexpected termination: {:?}", err);
 
 						let mut toast = Toast::new();
@@ -256,10 +211,6 @@ fn main() -> anyhow::Result<()> {
 					state.send_replace(State::Disconnected);
 
 					*control_flow = ControlFlow::Exit;
-				} else if menu_id == clear_id {
-					MANAGER.get().unwrap().clear()
-					.inspect_err(|err| error!("{err}"))
-					.unwrap();
 				} else if menu_id == reload_id {
 					info!("Reloading settings");
 					match get_settings() {

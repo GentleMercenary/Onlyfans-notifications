@@ -1,10 +1,7 @@
-use crate::{MANAGER, SETTINGS, TEMPDIR};
-use crate::client::{OFClient, Authorized};
-use crate::deserializers::notification_message;
-use crate::structs::{content, user::User, media::{download_media, Media}};
-
+use crate::{MANAGER, SETTINGS, TEMPDIR, deserializers::{notification_message, from_string}, structs::ToToast};
 use std::path::Path;
 use anyhow::bail;
+use of_client::{user::User, content, client::{OFClient, Authorized}, media::{download_media, Media}};
 use serde::{Deserialize, Serialize};
 use futures::future::{join, join_all};
 use winrt_toast::{content::image::{ImageHintCrop, ImagePlacement}, Header, Image, Toast};
@@ -39,8 +36,10 @@ pub struct Connected {
 
 #[derive(Deserialize, Debug)]
 pub struct PostPublished {
-	id: String,
-	user_id: String,
+	#[serde(deserialize_with = "from_string")]
+	id: u64,
+	#[serde(deserialize_with="from_string")]
+	user_id: u64,
 }
 
 #[derive(Deserialize, Debug)]
@@ -130,7 +129,7 @@ impl Message {
 
 				let handle = handle(&msg.from_user, &msg.content, client);
 				if SETTINGS.get().unwrap().lock().await.should_like::<content::Chat>(&msg.from_user.username) {
-					join(handle, client.like_message(&msg.content)).await.0
+					join(handle, client.like_chat(&msg.content)).await.0
 				} else {
 					handle.await
 				}
@@ -160,11 +159,11 @@ impl Message {
 	}
 }
 
-async fn create_notification<T: content::Content>(content: &T, client: &OFClient<Authorized>, user: &User) -> anyhow::Result<()> {
-	let header = <T as content::Content>::header();
-	let mut toast: Toast = content.toast();
+async fn create_notification<T: content::Content + ToToast>(content: &T, client: &OFClient<Authorized>, user: &User) -> anyhow::Result<()> {
+	let header = <T as ToToast>::header().to_string();
+	let mut toast: Toast = content.to_toast();
 	toast
-	.header(Header::new(header, header, ""))
+	.header(Header::new(&header, &header, ""))
 	.text1(&user.name);
 
 	if let Some(avatar) = user.download_avatar(client).await? {
@@ -191,13 +190,13 @@ async fn create_notification<T: content::Content>(content: &T, client: &OFClient
 	Ok(())
 }
 
-async fn handle<T: content::Content>(user: &User, content: &T, client: &OFClient<Authorized>) -> anyhow::Result<()> {
+async fn handle<T: content::Content + ToToast>(user: &User, content: &T, client: &OFClient<Authorized>) -> anyhow::Result<()> {
 	let settings = SETTINGS.get().unwrap().lock().await;
 
 	let username = &user.username;
 	let path = Path::new("data")
 		.join(username)
-		.join(T::header());
+		.join(T::header().to_string());
 
 	let notify = settings
 		.should_notify::<T>(username)
@@ -222,198 +221,4 @@ async fn handle<T: content::Content>(user: &User, content: &T, client: &OFClient
 		},
 		_ => Ok(())
 	};
-}
-
-#[cfg(test)]
-mod tests {
-	use crate::{get_auth_params, settings::{Settings, GlobalSelection, Whitelist}, init, SETTINGS, client::OFClient};
-
-	use std::sync::Once;
-	use std::thread::sleep;
-	use log::LevelFilter;
-	use simplelog::{TermLogger, TerminalMode, Config, ColorChoice};
-	use tokio::sync::Mutex;
-	use std::time::Duration;
-
-	static INIT: Once = Once::new();
-
-	fn test_init() {
-		INIT.call_once(|| {
-			init().unwrap();
-
-			SETTINGS
-			.set(Mutex::new(Settings {
-				notify: Whitelist::Global(GlobalSelection::Full(true)),
-				..Settings::default()
-			}))
-			.unwrap();
-	
-			TermLogger::init(
-				LevelFilter::Debug,
-				Config::default(),
-				TerminalMode::Mixed,
-				ColorChoice::Auto,
-			)
-			.unwrap();
-		});
-	}
-
-	#[tokio::test]
-	async fn test_chat_message() {
-		test_init();
-
-		let incoming = r#"{
-			"api2_chat_message": {
-				"id": 0,
-				"text": "This is a message<br />\n to test <a href = \"/onlyfans\">MARKDOWN parsing</a> 👌<br />\n in notifications 💯",
-				"price": 3.99,
-				"fromUser": {
-					"avatar": "https://public.onlyfans.com/files/m/mk/mka/mkamcrf6rjmcwo0jj4zoavhmalzohe5a1640180203/avatar.jpg",
-					"id": 15585607,
-					"name": "OnlyFans",
-					"username": "onlyfans"
-				},
-				"media": [
-					{
-						"id": 0,
-						"canView": true,
-						"src": "https://raw.githubusercontent.com/allenbenz/winrt-notification/main/resources/test/chick.jpeg",
-						"preview": "https://raw.githubusercontent.com/allenbenz/winrt-notification/main/resources/test/flower.jpeg",
-						"type": "photo"
-					}
-				]
-			}
-		}"#;
-
-		let msg = serde_json::from_str::<super::Message>(incoming).unwrap();
-		assert!(matches!(msg, super::Message::Tagged(super::TaggedMessage::Api2ChatMessage(_))));
-
-		let params = get_auth_params().unwrap();
-		let client = OFClient::new().authorize(params).await.unwrap();
-		msg.handle_message(&client).await.unwrap();
-		sleep(Duration::from_millis(1000));
-	}
-
-	#[tokio::test]
-	async fn test_post_message() {
-		test_init();
-
-		// Onlyfan april fools post
-		let incoming = r#"{
-			"post_published": {
-				"id": "129720708",
-				"user_id" : "15585607",
-				"show_posts_in_feed":true
-			}
-		}"#;
-
-		let msg = serde_json::from_str::<super::Message>(incoming).unwrap();
-		assert!(matches!(msg, super::Message::Tagged(super::TaggedMessage::PostPublished(_))));
-
-		let params = get_auth_params().unwrap();
-		let client = OFClient::new().authorize(params).await.unwrap();
-		msg.handle_message(&client).await.unwrap();
-		sleep(Duration::from_millis(1000));
-	}
-
-	#[tokio::test]
-	async fn test_story_message() {
-		test_init();
-
-		let incoming = r#"{
-			"stories": [
-				{
-					"id": 0,
-					"userId": 15585607,
-					"media":[
-						{
-							"id": 0,
-							"canView": true,
-							"files": {
-								"source": {
-									"url": "https://raw.githubusercontent.com/allenbenz/winrt-notification/main/resources/test/chick.jpeg"
-								},
-								"preview": {
-									"url": "https://raw.githubusercontent.com/allenbenz/winrt-notification/main/resources/test/flower.jpeg"
-								}
-							},
-							"type": "photo"
-						}
-					]
-				}
-			]
-		}"#;
-
-		let msg = serde_json::from_str::<super::Message>(incoming).unwrap();
-		assert!(matches!(msg, super::Message::Tagged(super::TaggedMessage::Stories(_))));
-
-		let params = get_auth_params().unwrap();
-		let client = OFClient::new().authorize(params).await.unwrap();
-		msg.handle_message(&client).await.unwrap();
-		sleep(Duration::from_millis(1000));
-	}
-
-	
-	#[tokio::test]
-	async fn test_notification_message() {
-		test_init();
-
-		let incoming = r#"{
-			"new_message":{
-			   "id":"0",
-			   "type":"message",
-			   "text":"is currently running a promotion, <a href=\"https://onlyfans.com/onlyfans\">check it out</a>",
-			   "subType":"promoreg_for_expired",
-			   "user_id":"274000171",
-			   "isRead":false,
-			   "canGoToProfile":true,
-			   "newPrice":null,
-			   "user":{
-					"avatar": "https://public.onlyfans.com/files/m/mk/mka/mkamcrf6rjmcwo0jj4zoavhmalzohe5a1640180203/avatar.jpg",
-					"id": 15585607,
-					"name": "OnlyFans",
-					"username": "onlyfans"
-				}
-			},
-			"hasSystemNotifications": false
-		 }"#;
-
-		let msg = serde_json::from_str::<super::Message>(incoming).unwrap();
-		assert!(matches!(msg, super::Message::NewMessage(_)));
-
-		let params = get_auth_params().unwrap();
-		let client = OFClient::new().authorize(params).await.unwrap();
-		msg.handle_message(&client).await.unwrap();
-		sleep(Duration::from_millis(1000));
-	}
-
-	#[tokio::test]
-	async fn test_stream_message() {
-		test_init();
-
-		let incoming = r#"{
-			"stream": {
-				"id": 2611175,
-				"description": "stream description",
-				"title": "stream title",
-				"startedAt": "2022-11-05T14:02:24+00:00",
-				"room": "dc2-room-7dYNFuya8oYBRs1",
-				"thumbUrl": "https://stream1-dc2.onlyfans.com/img/dc2-room-7dYNFuya8oYBRs1/thumb.jpg",
-				"user": {
-					"avatar": "https://public.onlyfans.com/files/m/mk/mka/mkamcrf6rjmcwo0jj4zoavhmalzohe5a1640180203/avatar.jpg",
-					"id": 15585607,
-					"name": "OnlyFans",
-					"username": "onlyfans"
-				}
-			}
-		}"#;
-
-		let msg = serde_json::from_str::<super::Message>(incoming).unwrap();
-		assert!(matches!(msg, super::Message::Tagged(super::TaggedMessage::Stream(_))));
-
-		let params = get_auth_params().unwrap();
-		let client = OFClient::new().authorize(params).await.unwrap();
-		msg.handle_message(&client).await.unwrap();
-		sleep(Duration::from_millis(1000));
-	}
 }

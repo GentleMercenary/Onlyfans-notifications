@@ -1,6 +1,6 @@
-use crate::{client::{OFClient, Authorized}, structs::{socket, ClickStats}};
-
 use anyhow::bail;
+use of_client::{client::{OFClient, Authorized}, structs::ClickStats};
+use crate::structs::socket;
 use rand::{rngs::StdRng, SeedableRng, Rng};
 use rand_distr::Exp1;
 use std::time::Duration;
@@ -13,9 +13,9 @@ use tokio_tungstenite::{connect_async, MaybeTlsStream, WebSocketStream, tungsten
 pub struct TimeoutExpired;
 impl std::error::Error for TimeoutExpired {}
 impl std::fmt::Display for TimeoutExpired {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.write_str("Timeout expired")
-    }
+	fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+		f.write_str("Timeout expired")
+	}
 }
 
 impl TryFrom<Message> for socket::Message {
@@ -44,6 +44,12 @@ pub struct WebSocketClient<Connection = Disconnected> {
 impl WebSocketClient {
 	pub fn new() -> Self {
 		Self { connection: Disconnected }
+	}
+}
+
+impl Default for WebSocketClient {
+	fn default() -> WebSocketClient {
+		WebSocketClient::new()
 	}
 }
 

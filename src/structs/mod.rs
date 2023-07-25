@@ -1,39 +1,108 @@
-use chrono::Utc;
-use rand_distr::{Distribution, Standard};
-use serde::Serialize;
+#![allow(dead_code)]
 
-pub mod user;
-pub mod media;
-pub mod content;
 pub mod socket;
 
-#[derive(Debug, Serialize)]
-enum Pages {
-	Collections,
-	Subscribes,
-	Profile,
-	Chats,
+use of_client::content;
+use winrt_toast::{Toast, content::text::TextPlacement, Text};
+
+pub enum ContentType {
+    Posts,
+    Messages,
+    Stories,
+    Notifications,
+    Streams
 }
 
-#[derive(Debug, Serialize)]
-#[serde(rename_all = "camelCase")]
-pub struct ClickStats {
-	page: Pages,
-	block: &'static str,
-	event_time: String
+impl ToString for ContentType {
+    fn to_string(&self) -> String {
+        match self {
+            ContentType::Posts => "Posts",
+            ContentType::Messages => "Messages",
+            ContentType::Stories => "Stories",
+            ContentType::Notifications => "Notifications",
+            ContentType::Streams => "Streams",
+        }.to_string()
+    }
 }
 
-impl Distribution<ClickStats> for Standard {
-	fn sample<R: rand::Rng + ?Sized>(&self, rng: &mut R) -> ClickStats {
-		ClickStats {
-			page: match rng.gen_range(0..=3) {
-				0 => Pages::Collections,
-				1 => Pages::Subscribes,
-				2 => Pages::Profile,
-				_ => Pages::Chats
-			},
-			block: "Menu",
-			event_time: Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Millis, true)
+pub trait ToToast {
+    fn to_toast(&self) -> Toast;
+    fn header() -> ContentType;
+}
+
+impl ToToast for content::Post {
+    fn to_toast(&self) -> Toast {
+        let mut toast = Toast::new();
+		toast.text2(&self.raw_text);
+
+		if let Some(price) = self.price && price > 0f32 {
+			toast
+			.text3(Text::new(format!("${price:.2}"))
+			.with_placement(TextPlacement::Attribution));
 		}
-	}
+
+		toast
+    }
+
+    fn header() -> ContentType {
+        ContentType::Posts
+    }
+}
+
+impl ToToast for content::Chat {
+    fn to_toast(&self) -> Toast {
+        let mut toast = Toast::new();
+		toast.text2(&self.text);
+
+		if let Some(price) = self.price && price > 0f32 {
+			toast
+			.text3(Text::new(format!("${price:.2}"))
+			.with_placement(TextPlacement::Attribution));
+		}
+
+		toast
+    }
+
+    fn header() -> ContentType {
+        ContentType::Messages
+    }
+}
+
+impl ToToast for content::Story {
+    fn to_toast(&self) -> Toast {
+        Toast::new()
+    }
+
+    fn header() -> ContentType {
+        ContentType::Stories
+    }
+}
+
+impl ToToast for content::Notification {
+    fn to_toast(&self) -> Toast {
+        let mut toast = Toast::new();
+		toast.text2(&self.text);
+		
+		toast
+    }
+
+    fn header() -> ContentType {
+        ContentType::Notifications
+    }
+}
+
+impl ToToast for content::Stream {
+    fn to_toast(&self) -> Toast {
+        let mut toast = Toast::new();
+
+		toast
+		.text2(&self.title)
+		.text3(&self.description);
+
+		toast
+    }
+
+    fn header() -> ContentType {
+        ContentType::Streams
+    }
 }

@@ -1,5 +1,5 @@
 [package]
-name = "of-notifier"
+name = "of-client"
 version = "0.1.0"
 edition = "2021"
 
@@ -10,23 +10,18 @@ edition = "2021"
 anyhow = "1.0.66"
 
 log = "0.4.17"
-simplelog = "0.12.0"
 
-image = "0.24.6"
-tao = { version = "0.21.0", features = ["tray"] }
-winrt-toast = "0.1.1"
-
-tokio = { version = "1.29.0", features = ["full"] }
-tokio-tungstenite = { version = "0.19.0", features = ["native-tls"] }
 futures = "0.3.21"
 futures-util = "0.3.21"
 
-serde_json = "1.0.82"
+strip_markdown = "0.2.0"
 serde = { version = "1.0.140", features = ["derive"] }
 
+rust-crypto = "0.2.36"
 rand = "0.8.5"
 rand_distr = "0.4.3"
 
+cached = "0.44.0"
 chrono = "0.4.19"
-tempdir = "0.3.7"
-of-client = { version = "0.1.0", path = "client" }
+filetime = "0.2.17"
+reqwest = { version = "0.11.11", features = ["cookies", "gzip", "json", "stream"] }

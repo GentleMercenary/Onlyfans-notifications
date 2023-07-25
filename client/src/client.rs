@@ -12,13 +12,13 @@ use std::{fs::{self, File}, io::Write, path::{Path, PathBuf}, sync::Arc, time::{
 pub struct Cookie {
 	pub sess: String,
 	pub auth_id: String,
-    pub other: HashMap<String, String>,
+	pub other: HashMap<String, String>,
 }
 
 impl TryFrom<Cookie> for Jar {
-    type Error = anyhow::Error;
+	type Error = anyhow::Error;
 
-    fn try_from(value: Cookie) -> Result<Self, Self::Error> {
+	fn try_from(value: Cookie) -> Result<Self, Self::Error> {
 		let cookie_jar = Jar::default();
 		let url: Url = "https://onlyfans.com".parse()?;
 
@@ -29,7 +29,7 @@ impl TryFrom<Cookie> for Jar {
 		}
 
 		Ok(cookie_jar)
-    }
+	}
 }
 
 #[derive(Deserialize, Debug)]
@@ -74,6 +74,12 @@ pub struct OFClient<Authorization = Unauthorized> {
 impl OFClient {
 	pub fn new() -> Self {
 		Self { auth: Unauthorized }
+	}
+}
+
+impl Default for OFClient {
+	fn default() -> Self {
+		Self::new()
 	}
 }
 

@@ -1,6 +1,6 @@
 Cargo.lock
 rustfmt.toml
-/target
+**/target
 /.vscode
 auth.json
 settings.json

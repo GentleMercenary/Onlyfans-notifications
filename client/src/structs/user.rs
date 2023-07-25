@@ -75,7 +75,7 @@ pub struct Subscriptions {
 }
 
 impl OFClient<Authorized> {
-	pub async fn get_user<I: fmt::Display>(&self, user_id: I) -> anyhow::Result<User> {
+	pub async fn get_user<S: fmt::Display>(&self, user_id: S) -> anyhow::Result<User> {
 		self.get(&format!("https://onlyfans.com/api2/v2/users/{user_id}"))
 		.and_then(|response| response.json::<User>().map_err(Into::into))
 		.await
@@ -83,7 +83,7 @@ impl OFClient<Authorized> {
 		.inspect_err(|err| error!("Error reading user {user_id}: {err:?}"))
 	}
 
-	pub async fn subscribe<I: fmt::Display>(&self, user_id: I) -> anyhow::Result<User> {
+	pub async fn subscribe<S: fmt::Display>(&self, user_id: S) -> anyhow::Result<User> {
 		self.post(&format!("https://onlyfans.com/api2/v2/users/{user_id}/subscribe"), None as Option<&String>)
 		.and_then(|response| response.json::<User>().map_err(Into::into))
 		.await
@@ -111,39 +111,5 @@ impl OFClient<Authorized> {
 			})
 		).await
 		.map(|i| i.into_iter().flatten().collect())
-	}
-}
-
-#[cfg(test)]
-mod tests {
-	use futures_util::TryFutureExt;
-use log::LevelFilter;
-use simplelog::{TermLogger, Config, TerminalMode, ColorChoice};
-	use crate::get_auth_params;
-	use super::OFClient;
-
-	fn test_init() {
-		TermLogger::init(
-			LevelFilter::Debug,
-			Config::default(),
-			TerminalMode::Mixed,
-			ColorChoice::Auto,
-		)
-		.unwrap();
-	}
-
-	#[tokio::test]
-	async fn get_subscriptions() -> anyhow::Result<()> {
-		test_init();
-
-		let client = futures::future::ready(get_auth_params())
-			.and_then(|params| OFClient::new().authorize(params))
-			.await?;
-
-		for user in client.get_subscriptions().await? {
-			println!("{user:?}");
-		}
-
-		Ok(())
 	}
 }

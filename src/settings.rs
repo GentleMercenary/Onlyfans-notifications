@@ -1,6 +1,5 @@
+use crate::structs::{ToToast, ContentType};
 use serde::Deserialize;
-
-use crate::structs::content::Content;
 
 #[derive(Deserialize, Debug)]
 #[serde(default)]
@@ -59,39 +58,38 @@ impl GlobalSelection {
 }
 
 impl Settings {
-	pub fn should_notify<C: Content>(&self, username: &str) -> bool {
+	pub fn should_notify<C: ToToast>(&self, username: &str) -> bool {
 		match &self.notify {
 			Whitelist::Global(global) => global.should_notify(username),
 			Whitelist::Granular(granular) => match C::header() {
-				"Posts" => granular.posts.should_notify(username),
-				"Messages" => granular.messages.should_notify(username),
-				"Stories" => granular.stories.should_notify(username),
-				"Notifications" => granular.notifications.should_notify(username),
-				"Streams" => granular.streams.should_notify(username),
-				_ => false
+				ContentType::Posts => granular.posts.should_notify(username),
+				ContentType::Messages => granular.messages.should_notify(username),
+				ContentType::Stories => granular.stories.should_notify(username),
+				ContentType::Notifications => granular.notifications.should_notify(username),
+				ContentType::Streams => granular.streams.should_notify(username)
 			},
 		}
 	}
 
-	pub fn should_download<C: Content>(&self, username: &str) -> bool {
+	pub fn should_download<C: ToToast>(&self, username: &str) -> bool {
 		match &self.download {
 			Whitelist::Global(global) => global.should_download(username),
 			Whitelist::Granular(granular) => match C::header() {
-				"Posts" => granular.posts.should_download(username),
-				"Messages" => granular.messages.should_download(username),
-				"Stories" => granular.stories.should_download(username),
+				ContentType::Posts => granular.posts.should_download(username),
+				ContentType::Messages => granular.messages.should_download(username),
+				ContentType::Stories => granular.stories.should_download(username),
 				_ => false
 			},
 		}
 	}
 
-	pub fn should_like<C: Content>(&self, username: &str) -> bool {
+	pub fn should_like<C: ToToast>(&self, username: &str) -> bool {
 		match &self.like {
 			Whitelist::Global(global) => global.should_like(username),
 			Whitelist::Granular(granular) => match C::header() {
-				"Posts" => granular.posts.should_like(username),
-				"Messages" => granular.messages.should_like(username),
-				"Stories" => granular.stories.should_like(username),
+				ContentType::Posts => granular.posts.should_like(username),
+				ContentType::Messages => granular.messages.should_like(username),
+				ContentType::Stories => granular.stories.should_like(username),
 				_ => false
 			},
 		}
