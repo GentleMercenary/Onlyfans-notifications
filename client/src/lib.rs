@@ -11,3 +11,5 @@ mod deserializers;
 pub use structs::content;
 pub use structs::media;
 pub use structs::user;
+pub use reqwest::Url;
+pub use reqwest::IntoUrl;

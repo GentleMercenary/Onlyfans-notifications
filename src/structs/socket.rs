@@ -1,7 +1,8 @@
-use crate::{MANAGER, SETTINGS, TEMPDIR, deserializers::{notification_message, from_string}, structs::ToToast};
+use crate::{MANAGER, SETTINGS, TEMPDIR, deserializers::{notification_message, from_string}, structs::ToToast, fetch_file};
 use std::path::Path;
-use anyhow::bail;
-use of_client::{user::User, content, client::{OFClient, Authorized}, media::{download_media, Media}};
+use anyhow::{bail, anyhow};
+use filetime::{FileTime, set_file_mtime};
+use of_client::{user::User, content, client::{OFClient, Authorized}, media::{Media, CommonMedia, MediaType}, Url};
 use serde::{Deserialize, Serialize};
 use futures::future::{join, join_all};
 use winrt_toast::{content::image::{ImageHintCrop, ImagePlacement}, Header, Image, Toast};
@@ -166,9 +167,31 @@ async fn create_notification<T: content::Content + ToToast>(content: &T, client:
 	.header(Header::new(&header, &header, ""))
 	.text1(&user.name);
 
-	if let Some(avatar) = user.download_avatar(client).await? {
+	if let Some(avatar) = &user.avatar {
+		let avatar_url = avatar.parse::<Url>()?;
+		let filename = avatar_url
+			.path_segments()
+			.and_then(|segments| {
+				let mut reverse_iter = segments.rev();
+				let ext = reverse_iter.next().and_then(|file| file.split('.').last());
+				let filename = reverse_iter.next();
+	
+				Option::zip(filename, ext).map(|(filename, ext)| [filename, ext].join("."))
+			})
+			.ok_or_else(|| anyhow!("Filename unknown"))?;
+	
+		let user_path = Path::new("data").join(&user.username);
+		let (_, avatar) = fetch_file(
+				client,
+				avatar,
+				&user_path.join("Profile").join("Avatars"),
+				Some(&filename),
+			)
+			.await?;
+
+		let abs_path = avatar.canonicalize()?;
 		toast.image(1,
-			Image::new_local(avatar)?
+			Image::new_local(abs_path)?
 			.with_hint_crop(ImageHintCrop::Circle)
 			.with_placement(ImagePlacement::AppLogoOverride),
 		);
@@ -182,7 +205,7 @@ async fn create_notification<T: content::Content + ToToast>(content: &T, client:
 		});
 
 	if let Some(thumb) = thumb {
-		let (_, thumb) = client.fetch_file(thumb, TEMPDIR.get().unwrap().path(), None).await?;
+		let (_, thumb) = fetch_file(client, thumb, TEMPDIR.get().unwrap().path(), None).await?;
 		toast.image(2, Image::new_local(thumb)?);
 	}
 
@@ -209,10 +232,29 @@ async fn handle<T: content::Content + ToToast>(user: &User, content: &T, client:
 		.then(|| {
 			content
 			.media()
-			.map(|media| download_media(client, media, &path))
+			.map(|media| join_all(media.iter().filter_map(|media| {
+					let path = path.join(match media.media_type() {
+						MediaType::Photo => "Images",
+						MediaType::Audio => "Audios",
+						MediaType::Video | MediaType::Gif => "Videos",
+					});
+			
+					CommonMedia::from(media).source.map(|url| async move {
+						fetch_file(client, url, &path, None)
+						.await
+						.inspect_err(|err| error!("Download failed: {err}"))
+						.map(|(downloaded, path)| {
+							if downloaded {
+								let _ = set_file_mtime(path, FileTime::from_unix_time(media.unix_time(), 0))
+									.inspect_err(|err| warn!("Error setting file modify time: {err}"));
+							}
+						})
+					})
+				}))
+			)
 		}).flatten();
 	
-	return match (notify, download) {
+	match (notify, download) {
 		(Some(notify), Some(download)) => join(notify, download).await.0,
 		(Some(notify), None) => notify.await,
 		(None, Some(download)) => {
@@ -220,5 +262,5 @@ async fn handle<T: content::Content + ToToast>(user: &User, content: &T, client:
 			Ok(())
 		},
 		_ => Ok(())
-	};
+	}
 }

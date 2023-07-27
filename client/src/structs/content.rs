@@ -104,15 +104,15 @@ impl Content for Stream {
 }
 
 impl OFClient<Authorized> {
-	pub async fn get_post(&self, post_id: u64) -> anyhow::Result<Post> {
+	pub async fn get_post(&self, post_id: u64) -> reqwest::Result<Post> {
 		self.get(&format!("https://onlyfans.com/api2/v2/posts/{post_id}"))
-		.and_then(|response| response.json::<Post>().map_err(Into::into))
+		.and_then(|response| response.json::<Post>())
 		.await
 		.inspect(|content| info!("Got content: {:?}", content))
 		.inspect_err(|err| error!("Error reading content {post_id}: {err:?}"))
 	}
 
-	pub async fn like_post(&self, post: &Post) -> anyhow::Result<Response> {
+	pub async fn like_post(&self, post: &Post) -> reqwest::Result<Response> {
 		let user_id = post.author.id;
 		let post_id = post.id;
 
@@ -120,14 +120,14 @@ impl OFClient<Authorized> {
 		.await
 	}
 	
-	pub async fn like_chat(&self, chat: &Chat) -> anyhow::Result<Response> {
+	pub async fn like_chat(&self, chat: &Chat) -> reqwest::Result<Response> {
 		let chat_id = chat.id;
 
 		self.post(&format!("https://onlyfans.com/api2/v2/messages/{chat_id}/like"), None as Option<&String>)
 		.await
 	}
 
-	pub async fn like_story(&self, story: &Story) -> anyhow::Result<Response> {
+	pub async fn like_story(&self, story: &Story) -> reqwest::Result<Response> {
 		let story_id = story.id;
 
 		self.post(&format!("https://onlyfans.com/api2/v2/stories/{story_id}/like"), None as Option<&String>)

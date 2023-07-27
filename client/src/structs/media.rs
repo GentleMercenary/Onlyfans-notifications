@@ -1,10 +1,7 @@
-use crate::{client::{OFClient, Authorized}, deserializers::str_to_date};
+use crate::deserializers::str_to_date;
 
-use std::path::Path;
 use serde::Deserialize;
 use chrono::{DateTime, Utc};
-use futures::future::join_all;
-use filetime::{set_file_mtime, FileTime};
 
 #[derive(Deserialize, Debug)]
 #[serde(rename_all = "snake_case")]
@@ -109,36 +106,13 @@ impl Media for Stream {
 	fn unix_time(&self) -> i64 { Utc::now().timestamp() }
 }
 
-struct CommonMedia<'a> {
-	source: Option<&'a str>,
-	thumbnail: Option<&'a str>,
+pub struct CommonMedia<'a> {
+	pub source: Option<&'a str>,
+	pub thumbnail: Option<&'a str>,
 }
 
 impl<'a, M: Media> From<&'a M> for CommonMedia<'a> {
 	fn from(value: &'a M) -> Self {
 		CommonMedia { source: value.source(), thumbnail: value.thumbnail() }
 	}
-}
-
-pub async fn download_media<T: Media>(client: &OFClient<Authorized>, media: &[T], path: &Path) {
-	join_all(media.iter().filter_map(|media| {
-		let type_str = match media.media_type() {
-			MediaType::Photo => "Images",
-			MediaType::Audio => "Audios",
-			MediaType::Video | MediaType::Gif => "Videos",
-		};
-
-		CommonMedia::from(media).source.map(|url| async move {
-			client.fetch_file(url, &path.join(type_str), None)
-			.await
-			.inspect_err(|err| error!("Download failed: {err}"))
-			.map(|(downloaded, path)| {
-				if downloaded {
-					let _ = set_file_mtime(path, FileTime::from_unix_time(media.unix_time(), 0))
-						.inspect_err(|err| warn!("Error setting file modify time: {err}"));
-				}
-			})
-		})
-	}))
-	.await;
 }

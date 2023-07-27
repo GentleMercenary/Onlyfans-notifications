@@ -33,6 +33,7 @@ pub async fn make_connection(channel: EventLoopProxy<Events>, mut state: Receive
 	let params = get_auth_params()?;
 
 	OFClient::new().authorize(params)
+	.map_err(Into::into)
 	.and_then(|client| async move {
 		info!("Fetching user data");
 		let _ = client.get("https://onlyfans.com/api2/v2/init").await?;
