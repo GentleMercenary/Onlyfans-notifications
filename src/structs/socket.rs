@@ -2,7 +2,7 @@ use crate::{MANAGER, SETTINGS, TEMPDIR, deserializers::{notification_message, fr
 use std::path::Path;
 use anyhow::{bail, anyhow};
 use filetime::{FileTime, set_file_mtime};
-use of_client::{user::User, content, client::{OFClient, Authorized}, media::{Media, CommonMedia, MediaType}, Url};
+use of_client::{user::User, content, client::{OFClient, Authorized}, media::{Media, MediaType}, Url};
 use serde::{Deserialize, Serialize};
 use futures::future::{join, join_all};
 use winrt_toast::{content::image::{ImageHintCrop, ImagePlacement}, Header, Image, Toast};
@@ -201,6 +201,7 @@ async fn create_notification<T: content::Content + ToToast>(content: &T, client:
 		.media()
 		.and_then(|media| {
 			media.iter()
+			.filter(|media| media.media_type() != &MediaType::Audio)
 			.find_map(|media| media.thumbnail().filter(|s| !s.is_empty()))
 		});
 
@@ -239,7 +240,7 @@ async fn handle<T: content::Content + ToToast>(user: &User, content: &T, client:
 						MediaType::Video | MediaType::Gif => "Videos",
 					});
 			
-					CommonMedia::from(media).source.map(|url| async move {
+					media.source().map(|url| async move {
 						fetch_file(client, url, &path, None)
 						.await
 						.inspect_err(|err| error!("Download failed: {err}"))

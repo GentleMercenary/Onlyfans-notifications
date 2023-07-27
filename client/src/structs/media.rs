@@ -3,7 +3,7 @@ use crate::deserializers::str_to_date;
 use serde::Deserialize;
 use chrono::{DateTime, Utc};
 
-#[derive(Deserialize, Debug)]
+#[derive(Deserialize, Debug, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
 pub enum MediaType {
 	Photo,
@@ -104,15 +104,4 @@ impl Media for Stream {
 	fn thumbnail(&self) -> Option<&str> { None }
 	fn media_type(&self) -> &MediaType { &MediaType::Photo }
 	fn unix_time(&self) -> i64 { Utc::now().timestamp() }
-}
-
-pub struct CommonMedia<'a> {
-	pub source: Option<&'a str>,
-	pub thumbnail: Option<&'a str>,
-}
-
-impl<'a, M: Media> From<&'a M> for CommonMedia<'a> {
-	fn from(value: &'a M) -> Self {
-		CommonMedia { source: value.source(), thumbnail: value.thumbnail() }
-	}
 }

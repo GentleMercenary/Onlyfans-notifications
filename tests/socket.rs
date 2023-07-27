@@ -123,8 +123,8 @@ socket_test!(test_notification_message, r#"{
 		"description": "stream description",
 		"title": "stream title",
 		"startedAt": "2022-11-05T14:02:24+00:00",
-		"room": "dc2-room-7dYNFuya8oYBRs1",
-		"thumbUrl": "https://stream1-dc2.onlyfans.com/img/dc2-room-7dYNFuya8oYBRs1/thumb.jpg",
+		"room": "dc2-room-roomId",
+		"thumbUrl": "https://stream1-dc2.onlyfans.com/img/dc2-room-roomId/thumb.jpg",
 		"user": {
 			"avatar": "https://public.onlyfans.com/files/m/mk/mka/mkamcrf6rjmcwo0jj4zoavhmalzohe5a1640180203/avatar.jpg",
 			"id": 15585607,
