@@ -1,5 +1,5 @@
 use anyhow::bail;
-use of_client::{client::{OFClient, Authorized}, structs::ClickStats};
+use of_client::client::{OFClient, Authorized};
 use crate::structs::socket;
 use rand::{rngs::StdRng, SeedableRng, Rng};
 use rand_distr::Exp1;
@@ -97,16 +97,12 @@ impl WebSocketClient<Connected> {
 		let rng = StdRng::from_entropy();
 		let mut activity_interval = rng.sample_iter(Exp1).map(|v: f32| Duration::from_secs_f32(v * 60.0));
 		let mut activity = tokio::time::interval(activity_interval.next().unwrap());
-		activity.tick().await;
 
 		loop {
 			tokio::select! {
 				_ = activity.tick() => {
-					let click = rand::random::<ClickStats>();
-					debug!("Simulating site activity: {}", serde_json::to_string(&click)?);
-					if let Err(err) = client.post("https://onlyfans.com/api2/v2/users/clicks-stats", Some(&click)).await {
-						warn!("{err:?}");
-					}
+					debug!("Simulating site activity: refreshing feed");
+					let _ = client.get("https://onlyfans.com/api2/v2/posts?limit=10&skip_users=all&format=infinite").await?;
 					activity = tokio::time::interval(activity_interval.next().unwrap());
 					activity.tick().await;
 				},
