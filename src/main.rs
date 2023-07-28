@@ -57,7 +57,7 @@ pub async fn make_connection(channel: EventLoopProxy<Events>, mut state: Receive
 				res = socket.message_loop(&client) => res,
 			};
 			
-			if SETTINGS.get().unwrap().lock().await.reconnect && let Err(err) = &res {
+			if let Err(err) = &res && SETTINGS.get().unwrap().lock().await.reconnect {
 				error!("{err}");
 				if let Some(ws_error::Protocol(protocol_error::ResetWithoutClosingHandshake)) = err.downcast_ref::<ws_error>() {
 					continue;
@@ -79,10 +79,9 @@ pub async fn daemon(channel: EventLoopProxy<Events>, mut state: Receiver<State>)
 		}
 
 		let res = make_connection(channel.clone(), state.clone()).await;
-		if 
-			let Err(err) = &res &&
-			SETTINGS.get().unwrap().blocking_lock().reconnect &&
-			err.root_cause().is::<websocket_client::TimeoutExpired>() {
+		if	let Err(err) = &res &&
+			err.root_cause().is::<websocket_client::TimeoutExpired>() &&
+			SETTINGS.get().unwrap().lock().await.reconnect {
 				error!("Timeout expired");
 				continue;
 		}
@@ -204,12 +203,10 @@ fn main() -> anyhow::Result<()> {
 			Event::MenuEvent { menu_id, .. } => {
 				if menu_id == quit_id {
 					state.send_replace(State::Disconnecting);
-					info!("Closing application");
-					MANAGER.get().unwrap().clear()
-					.inspect_err(|err| error!("{err}"))
-					.unwrap();
-
+					info!("Disconnecting");
+					
 					state.send_replace(State::Disconnected);
+					info!("Closing application");
 
 					*control_flow = ControlFlow::Exit;
 				} else if menu_id == reload_id {
