@@ -5,29 +5,8 @@ pub mod socket;
 use of_client::content;
 use winrt_toast::{Toast, content::text::TextPlacement, Text};
 
-pub enum ContentType {
-    Posts,
-    Messages,
-    Stories,
-    Notifications,
-    Streams
-}
-
-impl ToString for ContentType {
-    fn to_string(&self) -> String {
-        match self {
-            ContentType::Posts => "Posts",
-            ContentType::Messages => "Messages",
-            ContentType::Stories => "Stories",
-            ContentType::Notifications => "Notifications",
-            ContentType::Streams => "Streams",
-        }.to_string()
-    }
-}
-
 pub trait ToToast {
     fn to_toast(&self) -> Toast;
-    fn header() -> ContentType;
 }
 
 impl ToToast for content::Post {
@@ -42,10 +21,6 @@ impl ToToast for content::Post {
 		}
 
 		toast
-    }
-
-    fn header() -> ContentType {
-        ContentType::Posts
     }
 }
 
@@ -62,19 +37,11 @@ impl ToToast for content::Chat {
 
 		toast
     }
-
-    fn header() -> ContentType {
-        ContentType::Messages
-    }
 }
 
 impl ToToast for content::Story {
     fn to_toast(&self) -> Toast {
         Toast::new()
-    }
-
-    fn header() -> ContentType {
-        ContentType::Stories
     }
 }
 
@@ -84,10 +51,6 @@ impl ToToast for content::Notification {
 		toast.text2(&self.text);
 		
 		toast
-    }
-
-    fn header() -> ContentType {
-        ContentType::Notifications
     }
 }
 
@@ -100,9 +63,5 @@ impl ToToast for content::Stream {
 		.text3(&self.description);
 
 		toast
-    }
-
-    fn header() -> ContentType {
-        ContentType::Streams
     }
 }

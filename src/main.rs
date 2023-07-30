@@ -16,7 +16,7 @@ use of_client::{client::OFClient, user};
 use winrt_toast::{Toast, ToastDuration};
 use std::{fs::{self, File}, path::Path};
 use tokio::{sync::{Mutex, watch::{channel, Receiver}}, select};
-use simplelog::{Config, LevelFilter, WriteLogger, TermLogger,TerminalMode, ColorChoice};
+use simplelog::{Config, LevelFilter, WriteLogger, TermLogger,TerminalMode, ColorChoice, CombinedLogger};
 use tokio_tungstenite::tungstenite::error::{Error as ws_error, ProtocolError as protocol_error};
 use tao::{event_loop::{EventLoop, ControlFlow, EventLoopProxy}, window::Icon, system_tray::SystemTrayBuilder, menu::{ContextMenu, MenuItemAttributes}, event::{Event, TrayEvent}};
 
@@ -36,7 +36,6 @@ pub async fn make_connection(channel: EventLoopProxy<Events>, mut state: Receive
 	.map_err(Into::into)
 	.and_then(|client| async move {
 		info!("Fetching user data");
-		let _ = client.get("https://onlyfans.com/api2/v2/init").await?;
 		let me = client.get("https://onlyfans.com/api2/v2/users/me")
 			.and_then(|response| response.json::<user::Me>().map_err(Into::into))
 			.await?;
@@ -79,13 +78,6 @@ pub async fn daemon(channel: EventLoopProxy<Events>, mut state: Receiver<State>)
 		}
 
 		let res = make_connection(channel.clone(), state.clone()).await;
-		if	let Err(err) = &res &&
-			err.root_cause().is::<websocket_client::TimeoutExpired>() &&
-			SETTINGS.get().unwrap().lock().await.reconnect {
-				error!("Timeout expired");
-				continue;
-		}
-
 		channel.send_event(Events::Disconnected(res)).expect("Sent disconnect message");
 		if state.wait_for(|state| matches!(state, State::Disconnected)).await.is_err() {
 			break;
@@ -100,17 +92,19 @@ pub enum State { Disconnected, Connected, Connecting, Disconnecting }
 pub enum Events { Connected, Disconnected(anyhow::Result<()>) }
 
 fn main() -> anyhow::Result<()> {
-	if cfg!(debug_assertions) {
-		TermLogger::init(LevelFilter::Debug, Config::default(), TerminalMode::Mixed, ColorChoice::Auto)?;
-	} else {
-		let log_folder = Path::new("logs");
-		fs::create_dir_all(log_folder).expect("Created log directory");
-		let log_path = log_folder
-			.join(Local::now().format("%Y%m%d_%H%M%S").to_string())
-			.with_extension("log");
-		
-		WriteLogger::init(LevelFilter::Info, Config::default(), File::create(log_path)?)?;
-	}
+	let log_path = Path::new("logs")
+		.join(Local::now().format("%Y%m%d_%H%M%S").to_string())
+		.with_extension("log");
+
+	log_path.parent()
+	.and_then(|dir| fs::create_dir_all(dir).ok())
+	.expect("Created log directory");
+	
+	let log_level = if cfg!(debug_assertions) { LevelFilter::Debug } else { LevelFilter::Info };
+	CombinedLogger::init(vec![
+		TermLogger::new(log_level, Config::default(), TerminalMode::Mixed, ColorChoice::Auto),
+		WriteLogger::new(log_level, Config::default(), File::create(log_path)?)
+	])?;
 
 	init()?;
 
@@ -166,7 +160,16 @@ fn main() -> anyhow::Result<()> {
 				}
 				Events::Disconnected(reason) => {
 					state.send_replace(State::Disconnected);
+					tray_icon.set_icon(second_icon.clone());
+					info!("Disconnected");
+
 					if let Err(err) = reason {
+						if	err.root_cause().is::<websocket_client::TimeoutExpired>() &&
+							SETTINGS.get().unwrap().blocking_lock().reconnect {
+								state.send_replace(State::Connecting);
+								return;
+						}
+
 						error!("Unexpected termination: {:?}", err);
 
 						let mut toast = Toast::new();
@@ -180,8 +183,6 @@ fn main() -> anyhow::Result<()> {
 						.unwrap();
 					}
 
-					tray_icon.set_icon(second_icon.clone());
-					info!("Disconnected");
 				}
 			},
 			Event::TrayEvent {event, ..} => {

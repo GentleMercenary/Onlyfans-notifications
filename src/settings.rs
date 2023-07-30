@@ -1,4 +1,4 @@
-use crate::structs::{ToToast, ContentType};
+use of_client::content::{ContentType, self};
 use serde::Deserialize;
 
 #[derive(Deserialize, Debug)]
@@ -58,12 +58,12 @@ impl GlobalSelection {
 }
 
 impl Settings {
-	pub fn should_notify<C: ToToast>(&self, username: &str) -> bool {
+	pub fn should_notify<C: content::Content>(&self, username: &str) -> bool {
 		match &self.notify {
 			Whitelist::Global(global) => global.should_notify(username),
-			Whitelist::Granular(granular) => match C::header() {
+			Whitelist::Granular(granular) => match C::content_type() {
 				ContentType::Posts => granular.posts.should_notify(username),
-				ContentType::Messages => granular.messages.should_notify(username),
+				ContentType::Chats => granular.messages.should_notify(username),
 				ContentType::Stories => granular.stories.should_notify(username),
 				ContentType::Notifications => granular.notifications.should_notify(username),
 				ContentType::Streams => granular.streams.should_notify(username)
@@ -71,24 +71,24 @@ impl Settings {
 		}
 	}
 
-	pub fn should_download<C: ToToast>(&self, username: &str) -> bool {
+	pub fn should_download<C: content::Content>(&self, username: &str) -> bool {
 		match &self.download {
 			Whitelist::Global(global) => global.should_download(username),
-			Whitelist::Granular(granular) => match C::header() {
+			Whitelist::Granular(granular) => match C::content_type() {
 				ContentType::Posts => granular.posts.should_download(username),
-				ContentType::Messages => granular.messages.should_download(username),
+				ContentType::Chats => granular.messages.should_download(username),
 				ContentType::Stories => granular.stories.should_download(username),
 				_ => false
 			},
 		}
 	}
 
-	pub fn should_like<C: ToToast>(&self, username: &str) -> bool {
+	pub fn should_like<C: content::Content>(&self, username: &str) -> bool {
 		match &self.like {
 			Whitelist::Global(global) => global.should_like(username),
-			Whitelist::Granular(granular) => match C::header() {
+			Whitelist::Granular(granular) => match C::content_type() {
 				ContentType::Posts => granular.posts.should_like(username),
-				ContentType::Messages => granular.messages.should_like(username),
+				ContentType::Chats => granular.messages.should_like(username),
 				ContentType::Stories => granular.stories.should_like(username),
 				_ => false
 			},

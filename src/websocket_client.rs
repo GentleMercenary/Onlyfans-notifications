@@ -104,7 +104,7 @@ impl WebSocketClient<Connected> {
 				_ = activity.tick() => {
 					let click = rand::random::<ClickStats>();
 					debug!("Simulating site activity: {}", serde_json::to_string(&click)?);
-					if let Err(err) = client.post("https://onlyfans.com/api2/v2/users/clicks-stats", Some(&click)).await {
+					if let Err(err) = timeout(Duration::from_secs(2), client.post("https://onlyfans.com/api2/v2/users/clicks-stats", Some(&click))).await {
 						warn!("{err:?}");
 					}
 					activity = tokio::time::interval(activity_interval.next().unwrap());

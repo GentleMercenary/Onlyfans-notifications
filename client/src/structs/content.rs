@@ -1,10 +1,30 @@
 use crate::{deserializers::{de_markdown_string, str_to_date}, client::{OFClient, Authorized}, media, user::User};
 
-use std::slice;
+use std::{slice, fmt};
 use futures_util::TryFutureExt;
 use reqwest::Response;
 use serde::Deserialize;
 use chrono::{DateTime, Utc};
+
+pub enum ContentType {
+    Posts,
+    Chats,
+    Stories,
+    Notifications,
+    Streams
+}
+
+impl fmt::Display for ContentType {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str( match self {
+            ContentType::Posts => "Posts",
+            ContentType::Chats => "Messages",
+            ContentType::Stories => "Stories",
+            ContentType::Notifications => "Notifications",
+            ContentType::Streams => "Streams",
+        })
+    }
+}
 
 #[derive(Deserialize, Debug)]
 #[serde(rename_all = "camelCase")]
@@ -71,36 +91,42 @@ pub trait Content {
 	type Media: media::Media + Sync + Send;
 
 	fn media(&self) -> Option<&[Self::Media]>;
+	fn content_type() -> ContentType;
 }
 
 impl Content for Post {
 	type Media = media::Post;
 
 	fn media(&self) -> Option<&[Self::Media]> { Some(&self.media) }
+	fn content_type() -> ContentType { ContentType::Posts }
 }
 
 impl Content for Chat {
 	type Media = media::Chat;
-
+	
 	fn media(&self) -> Option<&[Self::Media]> { Some(&self.media) }
+	fn content_type() -> ContentType { ContentType::Chats }
 }
 
 impl Content for Story {
 	type Media = media::Story;
-
+	
 	fn media(&self) -> Option<&[Self::Media]> { Some(&self.media) }
+	fn content_type() -> ContentType { ContentType::Stories }
 }
 
 impl Content for Notification {
 	type Media = media::Post;
-
+	
 	fn media(&self) -> Option<&[Self::Media]> { None }
+	fn content_type() -> ContentType { ContentType::Notifications }
 }
 
 impl Content for Stream {
 	type Media = media::Stream;
-
+	
 	fn media(&self) -> Option<&[Self::Media]> { Some(slice::from_ref(&self.media)) }
+	fn content_type() -> ContentType { ContentType::Streams }
 }
 
 impl OFClient<Authorized> {

@@ -2,7 +2,7 @@ use crate::{client::{Authorized, OFClient}, deserializers::de_markdown_string};
 
 use std::fmt;
 use serde::Deserialize;
-use futures_util::{TryFutureExt, future::try_join_all};
+use futures_util::TryFutureExt;
 
 #[derive(Deserialize, Debug)]
 #[serde(rename_all = "camelCase")]
@@ -65,19 +65,9 @@ impl OFClient<Authorized> {
 		.await
 		.inspect_err(|err| error!("Error reading subscribe counts: {err:?}"))
 		.map(|counts| counts.subscriptions.all)?;
-	
-		const LIMIT: i32 = 10;
-		let n = (count as f32 / LIMIT as f32).ceil() as i32;
 
-		try_join_all(
-			(0..n+1)
-			.map(|a| async move {
-				let offset = a * LIMIT;
-				self.get(&format!("https://onlyfans.com/api2/v2/subscriptions/subscribes?limit={LIMIT}&offset={offset}&type=all"))
-				.and_then(|response| response.json::<Vec<User>>())
-				.await
-			})
-		).await
-		.map(|i| i.into_iter().flatten().collect())
+		self.get(&format!("https://onlyfans.com/api2/v2/subscriptions/subscribes?limit={count}&offset=0&type=all"))
+		.and_then(|response| response.json::<Vec<User>>())
+		.await
 	}
 }

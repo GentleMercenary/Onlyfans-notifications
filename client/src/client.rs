@@ -167,7 +167,7 @@ impl OFClient<Authorized> {
 		.and_then(Response::error_for_status)
 	}
 
-	pub async fn post<U: IntoUrl>(&self, link: U, body: Option<&impl Serialize>) -> reqwest::Result<Response> {
+	pub async fn post<U: IntoUrl, T: Serialize>(&self, link: U, body: Option<&T>) -> reqwest::Result<Response> {
 		let mut builder = self.request(Method::POST, link).await?;
 		if let Some(body) = body { builder = builder.json(body); }
 

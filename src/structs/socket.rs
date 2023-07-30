@@ -160,108 +160,83 @@ impl Message {
 	}
 }
 
-async fn create_notification<T: content::Content + ToToast>(content: &T, client: &OFClient<Authorized>, user: &User) -> anyhow::Result<()> {
-	let header = <T as ToToast>::header().to_string();
-	let mut toast: Toast = content.to_toast();
-	toast
-	.header(Header::new(&header, &header, ""))
-	.text1(&user.name);
-
-	if let Some(avatar) = &user.avatar {
-		let avatar_url = avatar.parse::<Url>()?;
-		let filename = avatar_url
-			.path_segments()
-			.and_then(|segments| {
-				let mut reverse_iter = segments.rev();
-				let ext = reverse_iter.next().and_then(|file| file.split('.').last());
-				let filename = reverse_iter.next();
-	
-				Option::zip(filename, ext).map(|(filename, ext)| [filename, ext].join("."))
-			})
-			.ok_or_else(|| anyhow!("Filename unknown"))?;
-	
-		let user_path = Path::new("data").join(&user.username);
-		let (_, avatar) = fetch_file(
-				client,
-				avatar,
-				&user_path.join("Profile").join("Avatars"),
-				Some(&filename),
-			)
-			.await?;
-
-		let abs_path = avatar.canonicalize()?;
-		toast.image(1,
-			Image::new_local(abs_path)?
-			.with_hint_crop(ImageHintCrop::Circle)
-			.with_placement(ImagePlacement::AppLogoOverride),
-		);
-	}
-	
-	let thumb = content
-		.media()
-		.and_then(|media| {
-			media.iter()
-			.filter(|media| media.media_type() != &MediaType::Audio)
-			.find_map(|media| media.thumbnail().filter(|s| !s.is_empty()))
-		});
-
-	if let Some(thumb) = thumb {
-		let (_, thumb) = fetch_file(client, thumb, TEMPDIR.get().unwrap().path(), None).await?;
-		toast.image(2, Image::new_local(thumb)?);
-	}
-
-	MANAGER.get().unwrap().show(&toast)?;
-	Ok(())
-}
-
 async fn handle<T: content::Content + ToToast>(user: &User, content: &T, client: &OFClient<Authorized>) -> anyhow::Result<()> {
 	let settings = SETTINGS.get().unwrap().lock().await;
+	let header = T::content_type().to_string();
 
-	let username = &user.username;
-	let path = Path::new("data")
-		.join(username)
-		.join(T::header().to_string());
+	let user_path = Path::new("data")
+		.join(&user.username);
 
-	let notify = settings
-		.should_notify::<T>(username)
-		.then(|| {
-			create_notification(content, client, user)
-		});
-	
-	let download = settings
-		.should_download::<T>(username)
-		.then(|| {
-			content
-			.media()
-			.map(|media| join_all(media.iter().filter_map(|media| {
-					let path = path.join(match media.media_type() {
-						MediaType::Photo => "Images",
-						MediaType::Audio => "Audios",
-						MediaType::Video | MediaType::Gif => "Videos",
-					});
+	let notify = async {
+		if settings.should_notify::<T>(&user.username) {
+			let mut toast: Toast = content.to_toast();
+			toast
+			.header(Header::new(&header, &header, ""))
+			.text1(&user.name);
+
+			if let Some(avatar) = &user.avatar {
+				let filename = Url::parse(avatar)?
+					.path_segments()
+					.and_then(|segments| {
+						let mut reverse_iter = segments.rev();
+						let ext = reverse_iter.next().and_then(|file| file.split('.').last());
+						let filename = reverse_iter.next();
 			
-					media.source().map(|url| async move {
-						fetch_file(client, url, &path, None)
-						.await
-						.inspect_err(|err| error!("Download failed: {err}"))
-						.map(|(downloaded, path)| {
-							if downloaded {
-								let _ = set_file_mtime(path, FileTime::from_unix_time(media.unix_time(), 0))
-									.inspect_err(|err| warn!("Error setting file modify time: {err}"));
-							}
-						})
+						Option::zip(filename, ext).map(|(filename, ext)| [filename, ext].join("."))
 					})
-				}))
-			)
-		}).flatten();
-	
-	match (notify, download) {
-		(Some(notify), Some(download)) => join(notify, download).await.0,
-		(Some(notify), None) => notify.await,
-		(None, Some(download)) => {
-			download.await;
-			Ok(())
-		},
-		_ => Ok(())
-	}
+					.ok_or_else(|| anyhow!("Filename unknown"))?;
+			
+				let (_, avatar) = fetch_file(client, avatar, &user_path.join("Profile").join("Avatars"), Some(&filename)).await?;
+				toast.image(1,
+					Image::new_local(avatar.canonicalize()?)?
+					.with_hint_crop(ImageHintCrop::Circle)
+					.with_placement(ImagePlacement::AppLogoOverride),
+				);
+			}
+			
+			let thumb = content
+				.media()
+				.and_then(|media| {
+					media.iter()
+					.filter(|media| media.media_type() != &MediaType::Audio)
+					.find_map(|media| media.thumbnail().filter(|s| !s.is_empty()))
+				});
+
+			if let Some(thumb) = thumb {
+				let (_, thumb) = fetch_file(client, thumb, TEMPDIR.get().unwrap().path(), None).await?;
+				toast.image(2, Image::new_local(thumb)?);
+			}
+
+			MANAGER.get().unwrap().show(&toast)?;
+		}
+		Ok(())
+	};
+
+	let download = async {
+		if settings.should_notify::<T>(&user.username) && let Some(media) = content.media() {
+			let _ = join_all(media.iter().filter_map(|media| {
+				let path = user_path.join(&header).join(match media.media_type() {
+					MediaType::Photo => "Images",
+					MediaType::Audio => "Audios",
+					MediaType::Video | MediaType::Gif => "Videos",
+				});
+		
+				media.source().map(|url| async move {
+					fetch_file(client, url, &path, None)
+					.await
+					.inspect_err(|err| error!("Download failed: {err}"))
+					.map(|(downloaded, path)| {
+						if downloaded {
+							let _ = set_file_mtime(path, FileTime::from_unix_time(media.unix_time(), 0))
+								.inspect_err(|err| warn!("Error setting file modify time: {err}"));
+						}
+					})
+				})
+			}))
+			.await;
+		}
+		Ok(()) as anyhow::Result<()>
+	};
+
+	join(notify, download).await.0
 }
