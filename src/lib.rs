@@ -71,7 +71,7 @@ pub async fn fetch_file<U: IntoUrl>(client: &OFClient<Authorized>, link: U, path
 
 	if !final_path.exists() {
 		fs::create_dir_all(path)?;
-		let temp_path = path.join(filename).with_extension(".temp");
+		let temp_path = path.join(filename).with_extension("temp");
 		let mut f = File::create(&temp_path).context(format!("Created file at {:?}", temp_path))?;
 
 		client.get(url)
