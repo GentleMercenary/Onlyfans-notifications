@@ -15,7 +15,7 @@ use image::io::Reader as ImageReader;
 use of_client::{client::OFClient, user};
 use winrt_toast::{Toast, ToastDuration};
 use std::{fs::{self, File}, path::Path};
-use tokio::{sync::{Mutex, watch::{channel, Receiver}}, select};
+use tokio::sync::{Mutex, watch::{channel, Receiver}};
 use simplelog::{Config, LevelFilter, WriteLogger, TermLogger,TerminalMode, ColorChoice, CombinedLogger};
 use tokio_tungstenite::tungstenite::error::{Error as ws_error, ProtocolError as protocol_error};
 use tao::{event_loop::{EventLoop, ControlFlow, EventLoopProxy}, window::Icon, system_tray::SystemTrayBuilder, menu::{ContextMenu, MenuItemAttributes}, event::{Event, TrayEvent}};
@@ -50,11 +50,9 @@ pub async fn make_connection(channel: EventLoopProxy<Events>, mut state: Receive
 			if state.wait_for(|state| matches!(state, State::Connected)).await.is_err() {
 				break (socket, Err(anyhow!("Channel is closed")));
 			}
-			
-			let res = select! {
-				_ = state.wait_for(|state| matches!(state, State::Disconnecting)) => Ok(()),
-				res = socket.message_loop(&client) => res,
-			};
+
+			let cancel = async { let _ = state.wait_for(|state| matches!(state, State::Disconnecting)).await; };
+			let res = socket.message_loop(&client, cancel).await;
 			
 			if let Err(err) = &res && SETTINGS.get().unwrap().lock().await.reconnect {
 				error!("{err}");

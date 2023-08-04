@@ -1,4 +1,5 @@
 use anyhow::bail;
+use async_scoped::{Scope, Tokio};
 use of_client::{client::{OFClient, Authorized}, structs::ClickStats};
 use crate::structs::socket;
 use rand::{rngs::StdRng, SeedableRng, Rng};
@@ -6,7 +7,7 @@ use rand_distr::Exp1;
 use std::time::Duration;
 use futures::TryFutureExt;
 use tokio::{net::TcpStream, time::timeout};
-use futures_util::{SinkExt, StreamExt, stream::{SplitStream, SplitSink}};
+use futures_util::{SinkExt, StreamExt, Future};
 use tokio_tungstenite::{connect_async, MaybeTlsStream, WebSocketStream, tungstenite::Message};
 
 #[derive(Debug)]
@@ -33,8 +34,7 @@ impl TryFrom<Message> for socket::Message {
 
 pub struct Disconnected;
 pub struct Connected {
-	sink: SplitSink<WebSocketStream<MaybeTlsStream<TcpStream>>, Message>,
-	stream: SplitStream<WebSocketStream<MaybeTlsStream<TcpStream>>>
+	socket: WebSocketStream<MaybeTlsStream<TcpStream>>
 }
 
 pub struct WebSocketClient<Connection = Disconnected> {
@@ -58,15 +58,12 @@ impl WebSocketClient<Disconnected> {
 		info!("Creating websocket");
 		let (socket, _) = connect_async("wss://ws2.onlyfans.com/ws2/").await?;
 		info!("Websocket created");
-
-		let(sink, stream) = socket.split();
-
 		let mut connected_client = WebSocketClient { 
-			connection: Connected { sink, stream }
+			connection: Connected { socket }
 		};
 
 		info!("Sending connect message");
-		connected_client.connection.sink
+		connected_client.connection.socket
 		.send(serde_json::to_vec(&socket::Connect { act: "connect", token })?.into())
 		.await?;
 
@@ -84,29 +81,29 @@ impl WebSocketClient<Disconnected> {
 }
 
 impl WebSocketClient<Connected> {
-	pub async fn close(self) -> anyhow::Result<()> {
-		let mut socket = self.connection.stream.reunite(self.connection.sink)?;
-		socket.close(None).await?;
-		Ok(())
+	pub async fn close(mut self) -> Result<(), tokio_tungstenite::tungstenite::Error> {
+		self.connection.socket.close(None).await
 	}
 
-	pub async fn message_loop(&mut self, client: &OFClient<Authorized>) -> anyhow::Result<()> {
+	pub async fn message_loop(&mut self, client: &OFClient<Authorized>, cancel: impl Future<Output = ()>) -> anyhow::Result<()> {
 		info!("Starting websocket message loop");
 		let mut interval = tokio::time::interval(Duration::from_secs(20));
 		let mut heartbeat_flight = false;
 		let rng = StdRng::from_entropy();
 		let mut activity_interval = rng.sample_iter(Exp1).map(|v: f32| Duration::from_secs_f32(v * 60.0));
 		let mut activity = tokio::time::interval(activity_interval.next().unwrap());
-		activity.tick().await;
 
-		loop {
+		let mut scope: Scope<'_, (), Tokio> = unsafe { Scope::create() };
+		tokio::pin!(cancel);
+		
+		let exit = loop {
 			tokio::select! {
+				_ = &mut cancel => break Ok(()),
 				_ = activity.tick() => {
 					let click = rand::random::<ClickStats>();
 					debug!("Simulating site activity: {}", serde_json::to_string(&click)?);
-					if let Err(err) = timeout(Duration::from_secs(2), client.post("https://onlyfans.com/api2/v2/users/clicks-stats", Some(&click))).await {
-						warn!("{err:?}");
-					}
+					scope.spawn_cancellable(async move { let _ = client.post("https://onlyfans.com/api2/v2/users/clicks-stats", Some(&click)).await; }, || ());
+
 					activity = tokio::time::interval(activity_interval.next().unwrap());
 					activity.tick().await;
 				},
@@ -121,28 +118,32 @@ impl WebSocketClient<Connected> {
 								debug!("Heartbeat acknowledged: {msg:?}");
 								heartbeat_flight = false;
 							}
-							msg.handle_message(client).await?;
+							scope.spawn_cancellable(async move { let _ = msg.handle_message(client).await; }, || ());
 						},
 						Ok(None) => {},
-						Err(err) => return Err(err),
+						Err(err) => break Err(err),
 					}
 				}
 			}
-		}
+		};
+
+		let _ = scope.collect::<Vec<_>>().await;
+		exit
+
 	}
 
 	async fn send_heartbeat(&mut self) -> anyhow::Result<()> {
 		const HEARTBEAT: socket::Heartbeat = socket::Heartbeat { act: "get_onlines", ids: &[] };
 
 		debug!("Sending heartbeat: {HEARTBEAT:?}");
-		self.connection.sink
+		self.connection.socket
 		.send(Message::Binary(serde_json::to_vec(&HEARTBEAT)?))
 		.await
 		.map_err(Into::into)
 	}
 
 	async fn wait_for_message(&mut self, duration: Duration) -> anyhow::Result<Option<socket::Message>> {
-		match timeout(duration, self.connection.stream.next()).await {
+		match timeout(duration, self.connection.socket.next()).await {
 			Err(_) => bail!(TimeoutExpired),
 			Ok(None) => bail!("Message queue exhausted"),
 			Ok(Some(msg)) => msg.map(|msg| msg.try_into().ok()).map_err(Into::into)
