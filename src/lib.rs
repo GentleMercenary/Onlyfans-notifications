@@ -17,7 +17,7 @@ use settings::Settings;
 use anyhow::{anyhow, Context};
 use serde::Deserialize;
 use winrt_toast::{ToastManager, register};
-use std::{fs::{self, File}, path::{Path, PathBuf}, io::{Error, ErrorKind, Write}, sync::OnceLock};
+use std::{fs::{self, File}, path::{Path, PathBuf}, io::{Error, ErrorKind, Write, BufWriter}, sync::OnceLock};
 
 pub static MANAGER: OnceLock<ToastManager> = OnceLock::new();
 pub static SETTINGS: OnceLock<Mutex<Settings>> = OnceLock::new();
@@ -72,7 +72,9 @@ pub async fn fetch_file<U: IntoUrl>(client: &OFClient<Authorized>, link: U, path
 	if !final_path.exists() {
 		fs::create_dir_all(path)?;
 		let temp_path = path.join(filename).with_extension("temp");
-		let mut f = File::create(&temp_path).context(format!("Created file at {:?}", temp_path))?;
+		let mut writer = File::create(&temp_path)
+			.map(BufWriter::new)
+			.context(format!("Created file at {:?}", temp_path))?;
 
 		client.get(url)
 		.map_err(Into::into)
@@ -80,8 +82,9 @@ pub async fn fetch_file<U: IntoUrl>(client: &OFClient<Authorized>, link: U, path
 			let mut stream = response.bytes_stream();
 			while let Some(item) = stream.next().await {
 				let chunk = item.context("Error while downloading file")?;
-				f.write_all(&chunk).context("Error writing file")?;
+				writer.write_all(&chunk).context("Error writing file")?;
 			}
+			writer.flush()?;
 			Ok(())
 		})
 		.await
