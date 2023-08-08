@@ -101,7 +101,7 @@ impl Media for Story {
 
 impl Media for Stream {
 	fn source(&self) -> Option<&str> { None }
-	fn thumbnail(&self) -> Option<&str> { None }
+	fn thumbnail(&self) -> Option<&str> { Some(&self.thumb_url) }
 	fn media_type(&self) -> &MediaType { &MediaType::Photo }
 	fn unix_time(&self) -> i64 { Utc::now().timestamp() }
 }

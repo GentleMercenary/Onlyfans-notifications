@@ -1,4 +1,4 @@
-use crate::{client::{Authorized, OFClient}, deserializers::de_markdown_string};
+use crate::{client::OFClient, deserializers::de_markdown_string};
 
 use std::fmt;
 use serde::Deserialize;
@@ -42,7 +42,7 @@ pub struct Subscriptions {
 	pub bookmarks: u32,
 }
 
-impl OFClient<Authorized> {
+impl OFClient {
 	pub async fn get_user<S: fmt::Display>(&self, user_id: S) -> reqwest::Result<User> {
 		self.get(&format!("https://onlyfans.com/api2/v2/users/{user_id}"))
 		.and_then(|response| response.json::<User>().map_err(Into::into))

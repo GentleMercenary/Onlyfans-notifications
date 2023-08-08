@@ -1,96 +1,72 @@
+use std::collections::HashSet;
+
 use of_client::content::{ContentType, self};
 use serde::Deserialize;
 
-#[derive(Deserialize, Debug)]
-#[serde(default)]
-pub struct Settings {
-	pub notify: Whitelist,
-	pub download: Whitelist,
-	pub like: Whitelist,
-	pub reconnect: bool
+#[derive(Deserialize, Debug, Clone)]
+#[serde(untagged)]
+pub enum CoarseSelection {
+	Whitelist(HashSet<String>),
+	All(bool),
 }
 
 #[derive(Deserialize, Debug, Default)]
 #[serde(default)]
 pub struct GranularSelection {
-	pub posts: GlobalSelection,
-	pub messages: GlobalSelection,
-	pub stories: GlobalSelection,
-	pub streams: GlobalSelection,
-	pub notifications: GlobalSelection
+	posts: CoarseSelection,
+	messages: CoarseSelection,
+	stories: CoarseSelection,
+	streams: CoarseSelection,
+	notifications: CoarseSelection
 }
 
 #[derive(Deserialize, Debug)]
 #[serde(untagged)]
-pub enum GlobalSelection {
-	Select(Vec<String>),
-	Full(bool),
-}
-
-#[derive(Deserialize, Debug)]
-#[serde(untagged)]
-pub enum Whitelist {
-	Global(GlobalSelection),
+pub enum Selection {
+	Coarse(CoarseSelection),
 	Granular(GranularSelection)
 }
 
-impl GlobalSelection {
-	pub fn should_notify(&self, username: &str) -> bool {
-		match &self {
-			Self::Select(whitelist) => whitelist.iter().any(|s| s == username),
-			Self::Full(b) => *b,
-		}
-	}
+#[derive(Deserialize, Debug)]
+#[serde(default)]
+pub struct Settings {
+	pub notify: Selection,
+	pub download: Selection,
+	pub like: Selection,
+	pub reconnect: bool
+}
 
-	pub fn should_download(&self, username: &str) -> bool {
+impl CoarseSelection {
+	pub fn enabled_for(&self, username: &str) -> bool {
 		match &self {
-			Self::Select(whitelist) => whitelist.iter().any(|s| s == username),
-			Self::Full(b) => *b,
-		}
-	}
-
-	pub fn should_like(&self, username: &str) -> bool {
-		match &self {
-			Self::Select(whitelist) => whitelist.iter().any(|s| s == username),
-			Self::Full(b) => *b,
+			Self::Whitelist(whitelist) => whitelist.contains(username),
+			Self::All(b) => *b,
 		}
 	}
 }
 
-impl Settings {
-	pub fn should_notify<C: content::Content>(&self, username: &str) -> bool {
-		match &self.notify {
-			Whitelist::Global(global) => global.should_notify(username),
-			Whitelist::Granular(granular) => match C::content_type() {
-				ContentType::Posts => granular.posts.should_notify(username),
-				ContentType::Chats => granular.messages.should_notify(username),
-				ContentType::Stories => granular.stories.should_notify(username),
-				ContentType::Notifications => granular.notifications.should_notify(username),
-				ContentType::Streams => granular.streams.should_notify(username)
-			},
-		}
+impl From<bool> for CoarseSelection {
+	fn from(value: bool) -> Self {
+		CoarseSelection::All(value)
 	}
+}
 
-	pub fn should_download<C: content::Content>(&self, username: &str) -> bool {
-		match &self.download {
-			Whitelist::Global(global) => global.should_download(username),
-			Whitelist::Granular(granular) => match C::content_type() {
-				ContentType::Posts => granular.posts.should_download(username),
-				ContentType::Chats => granular.messages.should_download(username),
-				ContentType::Stories => granular.stories.should_download(username),
-				_ => false
-			},
-		}
+impl Default for CoarseSelection {
+	fn default() -> Self {
+		CoarseSelection::from(false)
 	}
+}
 
-	pub fn should_like<C: content::Content>(&self, username: &str) -> bool {
-		match &self.like {
-			Whitelist::Global(global) => global.should_like(username),
-			Whitelist::Granular(granular) => match C::content_type() {
-				ContentType::Posts => granular.posts.should_like(username),
-				ContentType::Chats => granular.messages.should_like(username),
-				ContentType::Stories => granular.stories.should_like(username),
-				_ => false
+impl Selection {
+	pub fn enabled_for(&self, username: &str, content_type: ContentType) -> bool {
+		match self {
+			Selection::Coarse(coarse) => coarse.enabled_for(username),
+			Selection::Granular(granular) => match content_type {
+				ContentType::Posts => granular.posts.enabled_for(username),
+				ContentType::Chats => granular.messages.enabled_for(username),
+				ContentType::Stories => granular.stories.enabled_for(username),
+				ContentType::Notifications => granular.notifications.enabled_for(username),
+				ContentType::Streams => granular.streams.enabled_for(username)
 			},
 		}
 	}
@@ -99,16 +75,40 @@ impl Settings {
 impl Default for Settings {
 	fn default() -> Self {
 		Settings {
-			notify: Whitelist::Global(GlobalSelection::default()),
-			download: Whitelist::Global(GlobalSelection::default()),
-			like: Whitelist::Global(GlobalSelection::default()),
+			notify: Selection::Coarse(CoarseSelection::default()),
+			download: Selection::Coarse(CoarseSelection::default()),
+			like: Selection::Coarse(CoarseSelection::default()),
 			reconnect: true
 		}
 	}
 }
 
-impl Default for GlobalSelection {
-	fn default() -> Self {
-		GlobalSelection::Full(false)
+pub trait ShouldNotify {
+	fn should_notify(&self, username: &str, settings: &Settings) -> bool;
+}
+
+pub trait ShouldDownload {
+	fn should_download(&self, username: &str, settings: &Settings) -> bool;
+}
+
+pub trait ShouldLike {
+	fn should_like(&self, username: &str, settings: &Settings) -> bool;
+}
+
+impl<T: content::Content> ShouldNotify for T {
+	fn should_notify(&self, username: &str, settings: &Settings) -> bool {
+		settings.notify.enabled_for(username, T::content_type())
+	}
+}
+
+impl<T: content::HasMedia> ShouldDownload for T {
+	fn should_download(&self, username: &str, settings: &Settings) -> bool {
+		settings.download.enabled_for(username, T::content_type())
+	}
+}
+
+impl<T: content::CanLike> ShouldLike for T {
+	fn should_like(&self, username: &str, settings: &Settings) -> bool {
+		settings.like.enabled_for(username, T::content_type())
 	}
 }

@@ -9,7 +9,7 @@ async fn get_subscriptions() {
 	init_log();
 
 	let params = get_auth_params().unwrap();
-	let client = OFClient::new().authorize(params).await.unwrap();
+	let client = OFClient::new(params).await.unwrap();
 
 	for user in client.get_subscriptions().await.unwrap() {
 		println!("{user:?}");
@@ -20,7 +20,7 @@ async fn get_user_name() {
 	init_log();
 
 	let params = get_auth_params().unwrap();
-	let client = OFClient::new().authorize(params).await.unwrap();
+	let client = OFClient::new(params).await.unwrap();
 
 	let user = client.get_user("onlyfans").await.unwrap();
 	println!("{user:?}");
@@ -31,7 +31,7 @@ async fn get_user_id() {
 	init_log();
 
 	let params = get_auth_params().unwrap();
-	let client = OFClient::new().authorize(params).await.unwrap();
+	let client = OFClient::new(params).await.unwrap();
 
 	let user = client.get_user(15585607).await.unwrap();
 	println!("{user:?}");

@@ -58,29 +58,13 @@ async fn get_dynamic_rules() -> reqwest::Result<DyanmicRules> {
 	.inspect_err(|err| error!("Error reading dynamic rules: {err:?}"))
 }
 
-pub struct Unauthorized;
 #[derive(Debug)]
-pub struct Authorized { client: Client, params: AuthParams }
-
-#[derive(Debug)]
-pub struct OFClient<Authorization = Unauthorized> {
-	auth: Authorization,
+pub struct OFClient {
+	client: Client, params: AuthParams,
 }
 
 impl OFClient {
-	pub fn new() -> Self {
-		Self { auth: Unauthorized }
-	}
-}
-
-impl Default for OFClient {
-	fn default() -> Self {
-		Self::new()
-	}
-}
-
-impl OFClient<Unauthorized> {
-	pub async fn authorize(self, params: AuthParams) -> reqwest::Result<OFClient<Authorized>> {
+	pub async fn new(params: AuthParams) -> reqwest::Result<Self> {
 		let cookie_jar = Jar::from(&params.cookie);
 
 		let mut headers = header::HeaderMap::new();
@@ -96,13 +80,9 @@ impl OFClient<Unauthorized> {
 		.default_headers(headers)
 		.build()?;
 
-		Ok(OFClient {
-			auth: Authorized { client, params }
-		})
+		Ok(OFClient { client, params })
 	}
-}
 
-impl OFClient<Authorized> {
 	pub async fn make_headers<U: IntoUrl>(&self, link: U) -> reqwest::Result<header::HeaderMap> {
 		let dynamic_rules = get_dynamic_rules().await?;
 
@@ -124,7 +104,7 @@ impl OFClient<Authorized> {
 			dynamic_rules.static_param.as_str(),
 			&time,
 			&url_param,
-			&self.auth.params.cookie.auth_id
+			&self.params.cookie.auth_id
 			].join("\n"));
 
 		let sha_hash = hasher.result_str();
@@ -155,7 +135,7 @@ impl OFClient<Authorized> {
 	async fn request<U: IntoUrl>(&self, method: Method, link: U) -> reqwest::Result<RequestBuilder> {
 		let headers = self.make_headers(link.as_str()).await?;
 
-		Ok(self.auth.client.request(method, link)
+		Ok(self.client.request(method, link)
 			.headers(headers))
 	}
 

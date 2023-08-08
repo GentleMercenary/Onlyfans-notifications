@@ -1,11 +1,11 @@
 mod init;
 
-use of_notifier::{get_auth_params, structs::socket, init, SETTINGS, settings::{Settings, Whitelist, GlobalSelection}};
+use of_notifier::{get_auth_params, structs::socket, init, SETTINGS, settings::{Settings, Selection, CoarseSelection}};
 use of_client::client::OFClient;
 use std::thread::sleep;
 use std::time::Duration;
 use std::sync::Once;
-use tokio::sync::Mutex;
+use tokio::sync::RwLock;
 use init::init_log;
 
 static INIT: Once = Once::new();
@@ -15,8 +15,8 @@ fn test_init() {
 		init().unwrap();
 
 		SETTINGS
-		.set(Mutex::new(Settings {
-			notify: Whitelist::Global(GlobalSelection::Full(true)),
+		.set(RwLock::new(Settings {
+			notify: Selection::Coarse(CoarseSelection::from(true)),
 			..Settings::default()
 		}))
 		.unwrap();
@@ -35,7 +35,7 @@ macro_rules! socket_test {
 			assert!(matches!(msg, $match));
 	
 			let params = get_auth_params().unwrap();
-			let client = OFClient::new().authorize(params).await.unwrap();
+			let client = OFClient::new(params).await.unwrap();
 			msg.handle_message(&client).await.unwrap();
 			sleep(Duration::from_millis(1000));
 		}
@@ -78,6 +78,7 @@ socket_test!(test_story_message, r#"{
 		{
 			"id": 0,
 			"userId": 15585607,
+			"canLike": false,
 			"media":[
 				{
 					"id": 0,
@@ -119,12 +120,12 @@ socket_test!(test_notification_message, r#"{
 
 	socket_test!(test_stream_message, r#"{
 	"stream": {
-		"id": 2611175,
+		"id": 0,
 		"description": "stream description",
 		"title": "stream title",
 		"startedAt": "2022-11-05T14:02:24+00:00",
 		"room": "dc2-room-roomId",
-		"thumbUrl": "https://stream1-dc2.onlyfans.com/img/dc2-room-roomId/thumb.jpg",
+		"thumbUrl": "https://raw.githubusercontent.com/allenbenz/winrt-notification/main/resources/test/chick.jpeg",
 		"user": {
 			"avatar": "https://public.onlyfans.com/files/m/mk/mka/mkamcrf6rjmcwo0jj4zoavhmalzohe5a1640180203/avatar.jpg",
 			"id": 15585607,

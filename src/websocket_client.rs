@@ -1,6 +1,6 @@
 use anyhow::bail;
 use async_scoped::{Scope, Tokio};
-use of_client::{client::{OFClient, Authorized}, structs::ClickStats};
+use of_client::{client::OFClient, structs::ClickStats};
 use crate::structs::socket;
 use rand::{rngs::StdRng, SeedableRng, Rng};
 use rand_distr::Exp1;
@@ -54,7 +54,7 @@ impl Default for WebSocketClient {
 }
 
 impl WebSocketClient<Disconnected> {
-	pub async fn connect(self, token: &str, client: &OFClient<Authorized>) -> anyhow::Result<WebSocketClient<Connected>> {
+	pub async fn connect(self, token: &str) -> anyhow::Result<WebSocketClient<Connected>> {
 		info!("Creating websocket");
 		let (socket, _) = connect_async("wss://ws2.onlyfans.com/ws2/").await?;
 		info!("Websocket created");
@@ -71,7 +71,10 @@ impl WebSocketClient<Disconnected> {
 		.wait_for_message(Duration::from_secs(10))
 		.and_then(|msg| async move {
 			match msg {
-				Some(msg @ socket::Message::Connected(_)) => msg.handle_message(client).await,
+				Some(socket::Message::Connected(msg)) => {
+					info!("Connected message received: {:?}", msg); 
+					Ok(())
+				},
 				_ => bail!("Unexpected response to connect request: {:?}", msg)
 			}
 		}).await?;
@@ -85,7 +88,7 @@ impl WebSocketClient<Connected> {
 		self.connection.socket.close(None).await
 	}
 
-	pub async fn message_loop(&mut self, client: &OFClient<Authorized>, cancel: impl Future<Output = ()>) -> anyhow::Result<()> {
+	pub async fn message_loop(&mut self, client: &OFClient, cancel: impl Future<Output = ()>) -> anyhow::Result<()> {
 		info!("Starting websocket message loop");
 		let mut interval = tokio::time::interval(Duration::from_secs(20));
 		let mut heartbeat_flight = false;
@@ -127,7 +130,7 @@ impl WebSocketClient<Connected> {
 			}
 		};
 
-		let _ = scope.collect::<Vec<_>>().await;
+		scope.cancel();
 		exit
 
 	}

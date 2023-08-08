@@ -15,7 +15,7 @@ use image::io::Reader as ImageReader;
 use of_client::{client::OFClient, user};
 use winrt_toast::{Toast, ToastDuration};
 use std::{fs::{self, File}, path::Path};
-use tokio::sync::{Mutex, watch::{channel, Receiver}};
+use tokio::sync::{watch::{channel, Receiver}, RwLock};
 use simplelog::{Config, LevelFilter, WriteLogger, TermLogger,TerminalMode, ColorChoice, CombinedLogger};
 use tokio_tungstenite::tungstenite::error::{Error as ws_error, ProtocolError as protocol_error};
 use tao::{event_loop::{EventLoop, ControlFlow, EventLoopProxy}, window::Icon, system_tray::SystemTrayBuilder, menu::{ContextMenu, MenuItemAttributes}, event::{Event, TrayEvent}};
@@ -32,7 +32,7 @@ pub async fn make_connection(channel: EventLoopProxy<Events>, mut state: Receive
 	info!("Reading authentication parameters");
 	let params = get_auth_params()?;
 
-	OFClient::new().authorize(params)
+	OFClient::new(params)
 	.map_err(Into::into)
 	.and_then(|client| async move {
 		info!("Fetching user data");
@@ -44,7 +44,7 @@ pub async fn make_connection(channel: EventLoopProxy<Events>, mut state: Receive
 		let (socket, res) = loop {
 			info!("Connecting as {}", me.name);
 			let mut socket = websocket_client::WebSocketClient::new()
-			.connect(&me.ws_auth_token, &client).await?;
+			.connect(&me.ws_auth_token).await?;
 		
 			channel.send_event(Events::Connected)?;
 			if state.wait_for(|state| matches!(state, State::Connected)).await.is_err() {
@@ -54,7 +54,7 @@ pub async fn make_connection(channel: EventLoopProxy<Events>, mut state: Receive
 			let cancel = async { let _ = state.wait_for(|state| matches!(state, State::Disconnecting)).await; };
 			let res = socket.message_loop(&client, cancel).await;
 			
-			if let Err(err) = &res && SETTINGS.get().unwrap().lock().await.reconnect {
+			if let Err(err) = &res && SETTINGS.get().unwrap().read().await.reconnect {
 				error!("{err}");
 				if let Some(ws_error::Protocol(protocol_error::ResetWithoutClosingHandshake)) = err.downcast_ref::<ws_error>() {
 					continue;
@@ -106,7 +106,7 @@ fn main() -> anyhow::Result<()> {
 
 	init()?;
 
-	SETTINGS.set(Mutex::new(get_settings()?))
+	SETTINGS.set(RwLock::new(get_settings()?))
 	.expect("Settings read properly");
 
 	let event_loop = EventLoop::<Events>::with_user_event();
@@ -163,7 +163,7 @@ fn main() -> anyhow::Result<()> {
 
 					if let Err(err) = reason {
 						if	err.root_cause().is::<websocket_client::TimeoutExpired>() &&
-							SETTINGS.get().unwrap().blocking_lock().reconnect {
+							SETTINGS.get().unwrap().blocking_read().reconnect {
 								state.send_replace(State::Connecting);
 								return;
 						}
@@ -212,7 +212,7 @@ fn main() -> anyhow::Result<()> {
 					info!("Reloading settings");
 					match get_settings() {
 						Ok(settings) => {
-							*SETTINGS.get().unwrap().blocking_lock() = settings;
+							*SETTINGS.get().unwrap().blocking_write() = settings;
 							info!("Successfully updated settings")
 						},
 						Err(err) => error!("{err}")

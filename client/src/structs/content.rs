@@ -1,8 +1,8 @@
-use crate::{deserializers::{de_markdown_string, str_to_date}, client::{OFClient, Authorized}, media, user::User};
+use crate::{deserializers::{de_markdown_string, str_to_date}, client::OFClient, media, user::User};
 
 use std::{slice, fmt};
 use futures_util::TryFutureExt;
-use reqwest::Response;
+use reqwest::Url;
 use serde::Deserialize;
 use chrono::{DateTime, Utc};
 
@@ -34,6 +34,7 @@ pub struct Post {
 	pub raw_text: String,
 	pub price: Option<f32>,
 	pub author: User,
+	can_toggle_favorite: bool,
 	#[serde(default = "Utc::now")]
 	#[serde(deserialize_with = "str_to_date")]
 	posted_at: DateTime<Utc>,
@@ -57,6 +58,7 @@ pub struct Chat {
 #[serde(rename_all = "camelCase")]
 pub struct Story {
 	pub id: u64,
+	can_like: bool,
 	#[serde(default = "Utc::now")]
 	#[serde(deserialize_with = "str_to_date")]
 	posted_at: DateTime<Utc>,
@@ -88,75 +90,86 @@ pub struct Stream {
 }
 
 pub trait Content {
-	type Media: media::Media + Sync + Send;
-
-	fn media(&self) -> Option<&[Self::Media]>;
 	fn content_type() -> ContentType;
 }
 
-impl Content for Post {
-	type Media = media::Post;
+pub trait CanLike: Content {
+	fn can_like(&self) -> bool;
+	fn like_url(&self) -> Url;
+}
 
-	fn media(&self) -> Option<&[Self::Media]> { Some(&self.media) }
+pub trait HasMedia: Content {
+	type Media: media::Media + Sync + Send;
+	fn media(&self) -> &[Self::Media];
+}
+
+impl Content for Post {
 	fn content_type() -> ContentType { ContentType::Posts }
 }
 
+impl CanLike for Post {
+	fn can_like(&self) -> bool { self.can_toggle_favorite }
+	fn like_url(&self) -> Url {
+		Url::parse(&format!("https://onlyfans.com/api2/v2/posts/{}/favorites/{}", self.id, self.author.id)).unwrap()
+	}
+}
+
+impl HasMedia for Post {
+	type Media = media::Post;
+	fn media(&self) -> &[Self::Media] { &self.media }
+}
+
 impl Content for Chat {
-	type Media = media::Chat;
-	
-	fn media(&self) -> Option<&[Self::Media]> { Some(&self.media) }
 	fn content_type() -> ContentType { ContentType::Chats }
 }
 
+impl CanLike for Chat {
+	fn can_like(&self) -> bool { true }
+	fn like_url(&self) -> Url {
+		Url::parse(&format!("https://onlyfans.com/api2/v2/messages/{}/like", self.id)).unwrap()
+	}
+}
+
+impl HasMedia for Chat {
+	type Media = media::Chat;
+	fn media(&self) -> &[Self::Media] { &self.media }
+}
+
 impl Content for Story {
-	type Media = media::Story;
-	
-	fn media(&self) -> Option<&[Self::Media]> { Some(&self.media) }
 	fn content_type() -> ContentType { ContentType::Stories }
 }
 
+impl CanLike for Story {
+	fn can_like(&self) -> bool { self.can_like }
+	fn like_url(&self) -> Url {
+		Url::parse(&format!("https://onlyfans.com/api2/v2/stories/{}/like", self.id)).unwrap()
+	}
+}
+
+impl HasMedia for Story {
+	type Media = media::Story;
+	fn media(&self) -> &[Self::Media] { &self.media }
+}
+
 impl Content for Notification {
-	type Media = media::Post;
-	
-	fn media(&self) -> Option<&[Self::Media]> { None }
 	fn content_type() -> ContentType { ContentType::Notifications }
 }
 
 impl Content for Stream {
-	type Media = media::Stream;
-	
-	fn media(&self) -> Option<&[Self::Media]> { Some(slice::from_ref(&self.media)) }
 	fn content_type() -> ContentType { ContentType::Streams }
 }
 
-impl OFClient<Authorized> {
+impl HasMedia for Stream {
+	type Media = media::Stream;
+	fn media(&self) -> &[Self::Media] { slice::from_ref(&self.media) }
+}
+
+impl OFClient {
 	pub async fn get_post(&self, post_id: u64) -> reqwest::Result<Post> {
 		self.get(&format!("https://onlyfans.com/api2/v2/posts/{post_id}"))
 		.and_then(|response| response.json::<Post>())
 		.await
 		.inspect(|content| info!("Got content: {:?}", content))
 		.inspect_err(|err| error!("Error reading content {post_id}: {err:?}"))
-	}
-
-	pub async fn like_post(&self, post: &Post) -> reqwest::Result<Response> {
-		let user_id = post.author.id;
-		let post_id = post.id;
-
-		self.post(&format!("https://onlyfans.com/api2/v2/posts/{post_id}/favorites/{user_id}"), None as Option<&String>)
-		.await
-	}
-	
-	pub async fn like_chat(&self, chat: &Chat) -> reqwest::Result<Response> {
-		let chat_id = chat.id;
-
-		self.post(&format!("https://onlyfans.com/api2/v2/messages/{chat_id}/like"), None as Option<&String>)
-		.await
-	}
-
-	pub async fn like_story(&self, story: &Story) -> reqwest::Result<Response> {
-		let story_id = story.id;
-
-		self.post(&format!("https://onlyfans.com/api2/v2/stories/{story_id}/like"), None as Option<&String>)
-		.await
 	}
 }
