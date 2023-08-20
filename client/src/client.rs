@@ -46,7 +46,7 @@ struct DyanmicRules {
 	start: String,
 	end: String,
 	checksum_constant: i32,
-	checksum_indexes: Vec<i32>,
+	checksum_indexes: Vec<usize>,
 }
 
 #[once(time = 3600, result = true)]
@@ -112,8 +112,8 @@ impl OFClient {
 
 		let checksum = dynamic_rules
 		.checksum_indexes
-		.iter()
-		.map(|x| hash_ascii[*x as usize] as i32)
+		.into_iter()
+		.map(|x| hash_ascii[x] as i32)
 		.sum::<i32>() + dynamic_rules.checksum_constant;
 	
 		let mut headers = header::HeaderMap::new();
@@ -143,8 +143,8 @@ impl OFClient {
 		self.request(Method::GET, link)
 		.await?
 		.send()
+		.and_then(error_for_status_log)
 		.await
-		.and_then(Response::error_for_status)
 	}
 
 	pub async fn post<U: IntoUrl, T: Serialize>(&self, link: U, body: Option<&T>) -> reqwest::Result<Response> {
@@ -153,7 +153,18 @@ impl OFClient {
 
 		builder
 		.send()
+		.and_then(error_for_status_log)
 		.await
-		.and_then(Response::error_for_status)
+	}
+}
+
+async fn error_for_status_log(response: Response) -> reqwest::Result<Response> {
+	let result = response.error_for_status_ref();
+	match result {
+		Ok(_) => Ok(response),
+		Err(err) => {
+			error!("status {}, request body: {}", response.status(), response.text().await?);
+			Err(err)
+		},
 	}
 }

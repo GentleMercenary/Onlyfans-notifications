@@ -73,12 +73,12 @@ pub async fn fetch_file<U: IntoUrl>(client: &OFClient, link: U, path: &Path, fil
 	})
 	.ok_or_else(|| anyhow!("Filename unknown"))?;
 
-	let (filename, extension) = filename.rsplit_once('.').context("File has no extension")?;
+	let (filename, extension) = filename.rsplit_once('.').unwrap_or((filename, "temp"));
 	let final_path = path.join(filename).with_extension(extension);
 
 	if !final_path.exists() {
 		fs::create_dir_all(path)?;
-		let temp_path = path.join(filename).with_extension("temp");
+		let temp_path = final_path.with_extension("temp");
 		let mut writer = File::create(&temp_path)
 			.map(BufWriter::new)
 			.context(format!("Created file at {:?}", temp_path))?;

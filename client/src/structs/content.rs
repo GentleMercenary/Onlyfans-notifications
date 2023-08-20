@@ -79,8 +79,6 @@ pub struct Stream {
 	id: u64,
 	#[serde(deserialize_with = "de_markdown_string")]
 	pub description: String,
-	#[serde(deserialize_with = "de_markdown_string")]
-	pub title: String,
 	room: String,
 	#[serde(default = "Utc::now")]
 	#[serde(deserialize_with = "str_to_date")]

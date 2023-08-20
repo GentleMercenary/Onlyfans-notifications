@@ -136,8 +136,7 @@ impl ToToast for content::Stream {
         let mut toast = Toast::new();
 
 		toast
-		.text2(&self.title)
-		.text3(&self.description);
+		.text2(&self.description);
 
 		toast
     }
