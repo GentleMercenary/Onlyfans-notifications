@@ -40,20 +40,21 @@ pub struct AuthParams {
 }
 
 #[derive(Deserialize, Debug, Clone)]
-struct DyanmicRules {
+struct DynamicRules {
+	#[serde(rename(deserialize = "app-token"))]
 	app_token: String,
 	static_param: String,
-	start: String,
-	end: String,
+	prefix: String,
+	suffix: String,
 	checksum_constant: i32,
 	checksum_indexes: Vec<usize>,
 }
 
 #[once(time = 3600, result = true)]
-async fn get_dynamic_rules() -> reqwest::Result<DyanmicRules> {
-	reqwest::get("https://raw.githubusercontent.com/deviint/onlyfans-dynamic-rules/main/dynamicRules.json")
+async fn get_dynamic_rules() -> reqwest::Result<DynamicRules> {
+	reqwest::get("https://raw.githubusercontent.com/Growik/onlyfans-dynamic-rules/main/rules.json")
 	.inspect_err(|err| error!("Error getting dynamic rules: {err:?}"))
-	.and_then(Response::json::<DyanmicRules>)
+	.and_then(Response::json::<DynamicRules>)
 	.await
 	.inspect_err(|err| error!("Error reading dynamic rules: {err:?}"))
 }
@@ -119,10 +120,10 @@ impl OFClient {
 		let mut headers = header::HeaderMap::new();
 		headers.insert("sign", HeaderValue::from_str(
 			&format!("{}:{}:{:x}:{}",
-				dynamic_rules.start,
+				dynamic_rules.prefix,
 				sha_hash,
 				checksum.abs(),
-				dynamic_rules.end
+				dynamic_rules.suffix
 			)
 		).unwrap());
 		
