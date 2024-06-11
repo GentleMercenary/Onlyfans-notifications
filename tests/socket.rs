@@ -58,8 +58,8 @@ socket_test!(test_post_fundraising_message, r#"{
 	"post_fundraising_updated": {
 		"id": 1234,
 		"fundRaising": {
-			"target": 123,
-			"targetProgress": 40,
+			"target": 123.99,
+			"targetProgress": 39.99,
 			"presets": ["10","20","50","100"]
 		}
 	}
@@ -172,6 +172,13 @@ socket_test!(test_stream_start_message, r#"{
 		"userId": 15585607
 	}
 }"#, socket::Message::Tagged(socket::TaggedMessage::StreamStart(_)));
+
+socket_test!(test_stream_stop_message, r#"{
+	"stream_stop":{
+	"stream_id": "1234",
+	"stream_user_id": "15585607"
+	}
+}"#, socket::Message::Tagged(socket::TaggedMessage::StreamStop(_)));
 
 socket_test!(test_stream_update_message, r#"{
 	"stream_update": {

@@ -51,8 +51,8 @@ pub struct PostPublished {
 #[derive(Deserialize, Debug)]
 #[serde(rename_all = "camelCase")]
 struct Fundraising {
-	target: u32,
-	target_progress: u32,
+	target: f32,
+	target_progress: f32,
 	presets: Vec<String>
 }
 	
@@ -129,6 +129,14 @@ pub struct StreamStart {
 	stream_id: u64,
 	#[serde(rename = "userId")]
 	user_id: u64
+}
+
+#[derive(Deserialize, Debug)]
+pub struct StreamStop {
+	#[serde(deserialize_with = "from_string")]
+	stream_id: u64,
+	#[serde(deserialize_with = "from_string")]
+	stream_user_id: u64
 }
 
 #[derive(Deserialize, Debug)]
@@ -260,6 +268,7 @@ pub enum TaggedMessage {
 
 	Stream(Stream),
 	StreamStart(StreamStart),
+	StreamStop(StreamStop),
 	StreamUpdate(StreamUpdate),
 	StreamLook(StreamLook),
 	StreamUnlook(StreamLook),
