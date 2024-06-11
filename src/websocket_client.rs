@@ -1,5 +1,5 @@
 use anyhow::bail;
-use async_scoped::{Scope, Tokio};
+use async_scoped::{spawner::use_tokio::Tokio, Scope, TokioScope};
 use of_client::{client::OFClient, structs::ClickStats};
 use crate::structs::socket;
 use rand::{rngs::StdRng, SeedableRng, Rng};
@@ -96,7 +96,7 @@ impl WebSocketClient<Connected> {
 		let mut activity_interval = rng.sample_iter(Exp1).map(|v: f32| Duration::from_secs_f32(v * 60.0));
 		let mut activity = tokio::time::interval(activity_interval.next().unwrap());
 
-		let mut scope: Scope<'_, (), Tokio> = unsafe { Scope::create() };
+		let mut scope: TokioScope<'_, ()> = unsafe { Scope::create(Tokio) };
 		tokio::pin!(cancel);
 		
 		let exit = loop {

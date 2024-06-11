@@ -1,4 +1,3 @@
-#![feature(result_option_inspect)]
 #![feature(min_specialization)]
 #![feature(let_chains)]
 

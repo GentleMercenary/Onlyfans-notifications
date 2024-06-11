@@ -157,6 +157,16 @@ impl OFClient {
 		.and_then(error_for_status_log)
 		.await
 	}
+
+	pub async fn put<U: IntoUrl, T: Serialize>(&self, link: U, body: Option<&T>) -> reqwest::Result<Response> {
+		let mut builder = self.request(Method::PUT, link).await?;
+		if let Some(body) = body { builder = builder.json(body); }
+
+		builder
+		.send()
+		.and_then(error_for_status_log)
+		.await
+	}
 }
 
 async fn error_for_status_log(response: Response) -> reqwest::Result<Response> {
@@ -164,7 +174,8 @@ async fn error_for_status_log(response: Response) -> reqwest::Result<Response> {
 	match result {
 		Ok(_) => Ok(response),
 		Err(err) => {
-			error!("status {}, request body: {}", response.status(), response.text().await?);
+			let url = response.url().clone();
+			error!("url: {}, status {}, request body: {}", url, response.status(), response.text().await?);
 			Err(err)
 		},
 	}

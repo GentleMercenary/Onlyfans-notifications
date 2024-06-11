@@ -1,4 +1,4 @@
-use crate::deserializers::str_to_date;
+use crate::deserializers::de_str_to_date;
 
 use serde::Deserialize;
 use chrono::{DateTime, Utc};
@@ -22,7 +22,7 @@ pub struct Post {
 	preview: Option<String>,
 	can_view: bool,
 	#[serde(default = "Utc::now")]
-	#[serde(deserialize_with = "str_to_date")]
+	#[serde(deserialize_with = "de_str_to_date")]
 	created_at: DateTime<Utc>,
 }
 
@@ -36,7 +36,7 @@ pub struct Chat {
 	preview: Option<String>,
 	can_view: bool,
 	#[serde(default = "Utc::now")]
-	#[serde(deserialize_with = "str_to_date")]
+	#[serde(deserialize_with = "de_str_to_date")]
 	created_at: DateTime<Utc>,
 }
 
@@ -60,7 +60,7 @@ pub struct Story {
 	files: _Files,
 	can_view: bool,
 	#[serde(default = "Utc::now")]
-	#[serde(deserialize_with = "str_to_date")]
+	#[serde(deserialize_with = "de_str_to_date")]
 	created_at: DateTime<Utc>,
 }
 

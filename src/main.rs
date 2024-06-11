@@ -1,12 +1,11 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
-#![feature(result_option_inspect)]
 #![feature(let_chains)]
 
 #[macro_use]
 extern crate log;
 extern crate simplelog;
 
-use of_notifier::{self, init, SETTINGS, MANAGER, websocket_client, settings::Settings, get_auth_params};
+use of_notifier::{init, SETTINGS, MANAGER, websocket_client, settings::Settings, get_auth_params};
 
 use chrono::Local;
 use anyhow::anyhow;
@@ -30,43 +29,39 @@ fn get_settings() -> anyhow::Result<Settings> {
 
 pub async fn make_connection(channel: EventLoopProxy<Events>, mut state: Receiver<State>) -> anyhow::Result<()> {
 	info!("Reading authentication parameters");
-	let params = get_auth_params()?;
+	let client = OFClient::new(get_auth_params()?).await?;
+	
+	info!("Fetching user data");
+	let me = client.get("https://onlyfans.com/api2/v2/users/me")
+		.and_then(|response| response.json::<user::Me>().map_err(Into::into))
+		.await?;
+	
+	debug!("{:?}", me);
+	let (socket, res) = loop {
+		info!("Connecting as {}", me.name);
+		let mut socket = websocket_client::WebSocketClient::new()
+		.connect(&me.ws_auth_token).await?;
+	
+		channel.send_event(Events::Connected)?;
+		if state.wait_for(|state| matches!(state, State::Connected)).await.is_err() {
+			break (socket, Err(anyhow!("Channel is closed")));
+		}
 
-	OFClient::new(params)
-	.map_err(Into::into)
-	.and_then(|client| async move {
-		info!("Fetching user data");
-		let me = client.get("https://onlyfans.com/api2/v2/users/me")
-			.and_then(|response| response.json::<user::Me>().map_err(Into::into))
-			.await?;
+		let cancel = async { let _ = state.wait_for(|state| matches!(state, State::Disconnecting)).await; };
+		let res = socket.message_loop(&client, cancel).await;
 		
-		debug!("{:?}", me);
-		let (socket, res) = loop {
-			info!("Connecting as {}", me.name);
-			let mut socket = websocket_client::WebSocketClient::new()
-			.connect(&me.ws_auth_token).await?;
-		
-			channel.send_event(Events::Connected)?;
-			if state.wait_for(|state| matches!(state, State::Connected)).await.is_err() {
-				break (socket, Err(anyhow!("Channel is closed")));
+		if let Err(err) = &res && SETTINGS.get().unwrap().read().await.reconnect {
+			error!("{err}");
+			if let Some(ws_error::Protocol(protocol_error::ResetWithoutClosingHandshake)) = err.downcast_ref::<ws_error>() {
+				continue;
 			}
+		}
+		break (socket, res);
+	};
 
-			let cancel = async { let _ = state.wait_for(|state| matches!(state, State::Disconnecting)).await; };
-			let res = socket.message_loop(&client, cancel).await;
-			
-			if let Err(err) = &res && SETTINGS.get().unwrap().read().await.reconnect {
-				error!("{err}");
-				if let Some(ws_error::Protocol(protocol_error::ResetWithoutClosingHandshake)) = err.downcast_ref::<ws_error>() {
-					continue;
-				}
-			}
-			break (socket, res);
-		};
-
-		info!("Terminating websocket");
-		socket.close().await?;
-		res
-	}).await
+	info!("Terminating websocket");
+	socket.close().await?;
+	res
 }
 
 pub async fn daemon(channel: EventLoopProxy<Events>, mut state: Receiver<State>) {

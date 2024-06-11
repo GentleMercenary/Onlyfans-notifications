@@ -1,5 +1,7 @@
 use std::{str::FromStr, fmt::Display};
 
+use chrono::{DateTime, Utc};
+use of_client::deserializers::str_to_date;
 use serde::{Deserialize, Deserializer};
 
 use crate::structs::socket;
@@ -25,4 +27,14 @@ where
 
 	Deserialize::deserialize(deserializer)
 	.and_then(|s: &str| s.parse::<T>().map_err(serde::de::Error::custom))
+}
+
+pub fn de_str_to_date_opt<'de, D>(deserializer: D) -> Result<Option<DateTime<Utc>>, D::Error>
+where
+	D: Deserializer<'de>
+{
+	Deserialize::deserialize(deserializer)
+	.map(|s: Option<&str>| {
+		s.and_then(|date: &str| str_to_date(date).ok())
+	})
 }

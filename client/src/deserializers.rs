@@ -1,18 +1,22 @@
 use crate::client::Cookie;
 
 use serde::de::Error;
-use chrono::{DateTime, Utc};
+use chrono::{DateTime, ParseResult, Utc};
 use std::collections::HashMap;
 use strip_markdown::strip_markdown;
 use serde::{Deserialize, Deserializer};
 
-pub fn str_to_date<'de, D>(deserializer: D) -> Result<DateTime<Utc>, D::Error>
+pub fn str_to_date(s: &str) -> ParseResult<DateTime<Utc>> {
+	DateTime::parse_from_rfc3339(s)
+	.map(|date| date.with_timezone(&Utc))
+}
+
+pub fn de_str_to_date<'de, D>(deserializer: D) -> Result<DateTime<Utc>, D::Error>
 where
 	D: Deserializer<'de>,
 {
 	let s: &str = Deserialize::deserialize(deserializer)?;
-	DateTime::parse_from_rfc3339(s)
-	.map(|date| date.with_timezone(&Utc))
+	str_to_date(s)
 	.map_err(D::Error::custom)	
 }
 

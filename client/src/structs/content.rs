@@ -1,4 +1,4 @@
-use crate::{deserializers::{de_markdown_string, str_to_date}, client::OFClient, media, user::User};
+use crate::{deserializers::{de_markdown_string, de_str_to_date}, client::OFClient, media, user::User};
 
 use std::{slice, fmt};
 use futures_util::TryFutureExt;
@@ -7,23 +7,23 @@ use serde::Deserialize;
 use chrono::{DateTime, Utc};
 
 pub enum ContentType {
-    Posts,
-    Chats,
-    Stories,
-    Notifications,
-    Streams
+	Posts,
+	Chats,
+	Stories,
+	Notifications,
+	Streams
 }
 
 impl fmt::Display for ContentType {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.write_str( match self {
-            ContentType::Posts => "Posts",
-            ContentType::Chats => "Messages",
-            ContentType::Stories => "Stories",
-            ContentType::Notifications => "Notifications",
-            ContentType::Streams => "Streams",
-        })
-    }
+	fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+		f.write_str( match self {
+			ContentType::Posts => "Posts",
+			ContentType::Chats => "Messages",
+			ContentType::Stories => "Stories",
+			ContentType::Notifications => "Notifications",
+			ContentType::Streams => "Streams",
+		})
+	}
 }
 
 #[derive(Deserialize, Debug)]
@@ -34,10 +34,12 @@ pub struct Post {
 	pub raw_text: String,
 	pub price: Option<f32>,
 	pub author: User,
+	#[serde(default)]
 	can_toggle_favorite: bool,
 	#[serde(default = "Utc::now")]
-	#[serde(deserialize_with = "str_to_date")]
+	#[serde(deserialize_with = "de_str_to_date")]
 	posted_at: DateTime<Utc>,
+	#[serde(default)]
 	media: Vec<media::Post>,
 }
 
@@ -49,8 +51,9 @@ pub struct Chat {
 	pub text: String,
 	pub price: Option<f32>,
 	#[serde(default = "Utc::now")]
-	#[serde(deserialize_with = "str_to_date")]
+	#[serde(deserialize_with = "de_str_to_date")]
 	posted_at: DateTime<Utc>,
+	#[serde(default)]
 	media: Vec<media::Chat>,
 }
 
@@ -58,10 +61,12 @@ pub struct Chat {
 #[serde(rename_all = "camelCase")]
 pub struct Story {
 	pub id: u64,
+	#[serde(default)]
 	can_like: bool,
 	#[serde(default = "Utc::now")]
-	#[serde(deserialize_with = "str_to_date")]
+	#[serde(deserialize_with = "de_str_to_date")]
 	posted_at: DateTime<Utc>,
+	#[serde(default)]
 	media: Vec<media::Story>,
 }
 
@@ -81,7 +86,7 @@ pub struct Stream {
 	pub description: String,
 	room: String,
 	#[serde(default = "Utc::now")]
-	#[serde(deserialize_with = "str_to_date")]
+	#[serde(deserialize_with = "de_str_to_date")]
 	started_at: DateTime<Utc>,
 	#[serde(flatten)]
 	media: media::Stream,

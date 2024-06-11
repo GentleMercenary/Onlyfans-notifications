@@ -52,7 +52,7 @@ impl OFClient {
 	}
 
 	pub async fn subscribe<S: fmt::Display>(&self, user_id: S) -> reqwest::Result<User> {
-		self.post(&format!("https://onlyfans.com/api2/v2/users/{user_id}/subscribe"), None as Option<&String>)
+		self.post(&format!("https://onlyfans.com/api2/v2/users/{user_id}/subscribe"), None::<&()>)
 		.and_then(|response| response.json::<User>())
 		.await
 		.inspect(|user| info!("Got user: {:?}", user))

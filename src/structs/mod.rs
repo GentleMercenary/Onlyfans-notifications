@@ -2,7 +2,6 @@
 
 use std::{path::{Path, PathBuf}, fs::{File, self}, io::{BufWriter, Write}};
 
-use async_trait::async_trait;
 use anyhow::{anyhow, Context};
 use futures_util::{TryFutureExt, StreamExt};
 use of_client::{client::OFClient, user::User, Url, IntoUrl, media::{self, MediaType}};
@@ -12,66 +11,67 @@ use crate::TEMPDIR;
 pub mod socket;
 
 
-#[async_trait]
-pub trait ToastExt {
-    async fn with_avatar(&mut self, user: &User, client: &OFClient) -> anyhow::Result<&mut Self>;
-    async fn with_thumbnail<T: media::Media + Sync>(&mut self, media: &[T], client: &OFClient) -> anyhow::Result<&mut Self>;
+trait ToastExt {
+	async fn with_avatar(&mut self, user: &User, client: &OFClient) -> anyhow::Result<&mut Self>;
+	async fn with_thumbnail<T: media::Media + Sync>(&mut self, media: &[T], client: &OFClient) -> anyhow::Result<&mut Self>;
 }
 
-#[async_trait]
 impl ToastExt for Toast {
-    async fn with_avatar(&mut self, user: &User, client: &OFClient) -> anyhow::Result<&mut Self> {
-        let user_path = Path::new("data").join(&user.username);
+	async fn with_avatar(&mut self, user: &User, client: &OFClient) -> anyhow::Result<&mut Self> {
+		let user_path = Path::new("data").join(&user.username);
+		let mut ret = self;
 
-        if let Some(avatar) = &user.avatar {
-            let filename = Url::parse(avatar)?
-                .path_segments()
-                .and_then(|segments| {
-                    let mut reverse_iter = segments.rev();
-                    let ext = reverse_iter.next().and_then(|file| file.split('.').last());
-                    let filename = reverse_iter.next();
-        
-                    Option::zip(filename, ext).map(|(filename, ext)| [filename, ext].join("."))
-                })
-                .ok_or_else(|| anyhow!("Filename unknown"))?;
-        
-            let (_, avatar) = fetch_file(client, avatar, &user_path.join("Profile").join("Avatars"), Some(&filename)).await?;
+		if let Some(avatar) = &user.avatar {
+			let filename = Url::parse(avatar)?
+				.path_segments()
+				.and_then(|segments| {
+					let mut reverse_iter = segments.rev();
+					let ext = reverse_iter.next().and_then(|file| file.split('.').last());
+					let filename = reverse_iter.next();
+		
+					Option::zip(filename, ext).map(|(filename, ext)| [filename, ext].join("."))
+				})
+				.ok_or_else(|| anyhow!("Filename unknown"))?;
+		
+			let (_, avatar) = fetch_file(client, avatar, &user_path.join("Profile").join("Avatars"), Some(&filename)).await?;
 
-            Ok(self.image(1,
-                Image::new_local(avatar.canonicalize()?)?
-                .with_hint_crop(ImageHintCrop::Circle)
-                .with_placement(ImagePlacement::AppLogoOverride),
-            ))
-        } else {
-            Ok (self)
-        }
-    }
+			ret = ret.image(1,
+				Image::new_local(avatar.canonicalize()?)?
+				.with_hint_crop(ImageHintCrop::Circle)
+				.with_placement(ImagePlacement::AppLogoOverride),
+			);
+		}
 
-    async fn with_thumbnail<T: media::Media + Sync>(&mut self, media: &[T], client: &OFClient) -> anyhow::Result<&mut Self> {
-        let thumb = media
-            .iter()
-            .filter(|media| media.media_type() != &MediaType::Audio)
-            .find_map(|media| media.thumbnail().filter(|s| !s.is_empty()));
+		Ok(ret)
+	}
+
+	async fn with_thumbnail<T: media::Media + Sync>(&mut self, media: &[T], client: &OFClient) -> anyhow::Result<&mut Self> {
+		let thumb = media
+			.iter()
+			.filter(|media| media.media_type() != &MediaType::Audio)
+			.find_map(|media| media.thumbnail().filter(|s| !s.is_empty()));
+		
+		let mut ret = self;
 
 		if let Some(thumb) = thumb {
 			let (_, path) = fetch_file(client, thumb, TEMPDIR.get().unwrap().path(), None).await?;
-			Ok(self.image(2, Image::new_local(path)?))
-		} else {
-			Ok(self)
+			ret = ret.image(2, Image::new_local(path)?);
 		}
-    }
+
+		Ok(ret)
+	}
 }
 
 pub async fn fetch_file<U: IntoUrl>(client: &OFClient, link: U, path: &Path, filename: Option<&str>) -> anyhow::Result<(bool, PathBuf)> {
 	let url = link.into_url()?;
 	let filename = filename
-	.or_else(|| {
-		url
-		.path_segments()
-		.and_then(Iterator::last)
-		.and_then(|name| (!name.is_empty()).then_some(name))
-	})
-	.ok_or_else(|| anyhow!("Filename unknown"))?;
+		.or_else(|| {
+			url
+			.path_segments()
+			.and_then(Iterator::last)
+			.and_then(|name| (!name.is_empty()).then_some(name))
+		})
+		.ok_or_else(|| anyhow!("Filename unknown"))?;
 
 	let (filename, extension) = filename.rsplit_once('.').unwrap_or((filename, "temp"));
 	let final_path = path.join(filename).with_extension(extension);
