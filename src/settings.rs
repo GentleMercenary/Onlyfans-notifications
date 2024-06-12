@@ -1,6 +1,8 @@
 use std::collections::HashSet;
 
+use log::LevelFilter;
 use of_client::content::{ContentType, self};
+use crate::deserializers::de_log_level;
 use serde::Deserialize;
 
 #[derive(Deserialize, Debug, Clone)]
@@ -33,7 +35,9 @@ pub struct Settings {
 	pub notify: Selection,
 	pub download: Selection,
 	pub like: Selection,
-	pub reconnect: bool
+	pub reconnect: bool,
+	#[serde(deserialize_with="de_log_level")]
+	pub log_level: LevelFilter
 }
 
 impl CoarseSelection {
@@ -78,7 +82,8 @@ impl Default for Settings {
 			notify: Selection::Coarse(CoarseSelection::default()),
 			download: Selection::Coarse(CoarseSelection::default()),
 			like: Selection::Coarse(CoarseSelection::default()),
-			reconnect: true
+			reconnect: true,
+			log_level: LevelFilter::Info
 		}
 	}
 }

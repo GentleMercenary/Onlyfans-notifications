@@ -41,7 +41,6 @@ pub struct AuthParams {
 
 #[derive(Deserialize, Debug, Clone)]
 struct DynamicRules {
-	#[serde(rename(deserialize = "app-token"))]
 	app_token: String,
 	static_param: String,
 	prefix: String,
@@ -52,7 +51,7 @@ struct DynamicRules {
 
 #[once(time = 3600, result = true)]
 async fn get_dynamic_rules() -> reqwest::Result<DynamicRules> {
-	reqwest::get("https://raw.githubusercontent.com/Growik/onlyfans-dynamic-rules/main/rules.json")
+	reqwest::get("https://raw.githubusercontent.com/riley-access-labs/onlyfans-dynamic-rules-1/patch-1/dynamicRules.json")
 	.inspect_err(|err| error!("Error getting dynamic rules: {err:?}"))
 	.and_then(Response::json::<DynamicRules>)
 	.await

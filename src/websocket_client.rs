@@ -104,7 +104,7 @@ impl WebSocketClient<Connected> {
 				_ = &mut cancel => break Ok(()),
 				_ = activity.tick() => {
 					let click = rand::random::<ClickStats>();
-					debug!("Simulating site activity: {}", serde_json::to_string(&click)?);
+					trace!("Simulating site activity: {}", serde_json::to_string(&click)?);
 					scope.spawn_cancellable(async move { let _ = client.post("https://onlyfans.com/api2/v2/users/clicks-stats", Some(&click)).await; }, || ());
 
 					activity = tokio::time::interval(activity_interval.next().unwrap());
@@ -118,7 +118,7 @@ impl WebSocketClient<Connected> {
 					match msg {
 						Ok(Some(msg)) => {
 							if let socket::Message::Onlines(_) = msg {
-								debug!("Heartbeat acknowledged: {msg:?}");
+								trace!("Heartbeat acknowledged: {msg:?}");
 								heartbeat_flight = false;
 							}
 							scope.spawn_cancellable(async move { let _ = msg.handle_message(client).await; }, || ());
@@ -138,7 +138,7 @@ impl WebSocketClient<Connected> {
 	async fn send_heartbeat(&mut self) -> anyhow::Result<()> {
 		const HEARTBEAT: socket::Heartbeat = socket::Heartbeat { act: "get_onlines", ids: &[] };
 
-		debug!("Sending heartbeat: {HEARTBEAT:?}");
+		trace!("Sending heartbeat: {HEARTBEAT:?}");
 		self.connection.socket
 		.send(Message::Binary(serde_json::to_vec(&HEARTBEAT)?))
 		.await
