@@ -17,7 +17,7 @@ tao = { version = "0.21.0", features = ["tray"] }
 winrt-toast = "0.1.1"
 async-trait = "0.1.72"
 tokio = { version = "1.29.0", features = ["sync", "time"] }
-tokio-tungstenite = { version = "0.21.0", features = ["native-tls"] }
+tokio-tungstenite = { version = "0.23.1", features = ["native-tls"] }
 futures = "0.3.21"
 futures-util = "0.3.21"
 async-scoped = {version = "0.9.0", features = ["use-tokio"] }

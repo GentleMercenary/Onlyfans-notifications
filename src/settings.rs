@@ -5,6 +5,10 @@ use of_client::content::{ContentType, self};
 use crate::deserializers::de_log_level;
 use serde::Deserialize;
 
+fn default_log_level() -> LevelFilter {
+	LevelFilter::Info
+}
+
 #[derive(Deserialize, Debug, Clone)]
 #[serde(untagged)]
 pub enum CoarseSelection {
@@ -36,6 +40,7 @@ pub struct Settings {
 	pub download: Selection,
 	pub like: Selection,
 	pub reconnect: bool,
+	#[serde(default = "default_log_level")]
 	#[serde(deserialize_with="de_log_level")]
 	pub log_level: LevelFilter
 }
@@ -83,7 +88,7 @@ impl Default for Settings {
 			download: Selection::Coarse(CoarseSelection::default()),
 			like: Selection::Coarse(CoarseSelection::default()),
 			reconnect: true,
-			log_level: LevelFilter::Info
+			log_level: default_log_level()
 		}
 	}
 }

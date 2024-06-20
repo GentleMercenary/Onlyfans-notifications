@@ -43,15 +43,14 @@ pub struct AuthParams {
 struct DynamicRules {
 	app_token: String,
 	static_param: String,
-	prefix: String,
-	suffix: String,
+	format: String,
 	checksum_constant: i32,
 	checksum_indexes: Vec<usize>,
 }
 
 #[once(time = 3600, result = true)]
 async fn get_dynamic_rules() -> reqwest::Result<DynamicRules> {
-	reqwest::get("https://raw.githubusercontent.com/riley-access-labs/onlyfans-dynamic-rules-1/patch-1/dynamicRules.json")
+	reqwest::get("https://raw.githubusercontent.com/xagler/dynamic-rules/main/onlyfans.json")
 	.inspect_err(|err| error!("Error getting dynamic rules: {err:?}"))
 	.and_then(Response::json::<DynamicRules>)
 	.await
@@ -116,13 +115,16 @@ impl OFClient {
 		.map(|x| hash_ascii[x] as i32)
 		.sum::<i32>() + dynamic_rules.checksum_constant;
 	
+		let prefix = &dynamic_rules.format[..dynamic_rules.format.find(':').unwrap()];
+		let suffix = &dynamic_rules.format[dynamic_rules.format.rfind(':').unwrap() + 1..];
+
 		let mut headers = header::HeaderMap::new();
 		headers.insert("sign", HeaderValue::from_str(
 			&format!("{}:{}:{:x}:{}",
-				dynamic_rules.prefix,
+				prefix,
 				sha_hash,
 				checksum.abs(),
-				dynamic_rules.suffix
+				suffix
 			)
 		).unwrap());
 		

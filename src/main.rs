@@ -16,7 +16,7 @@ use of_client::{client::OFClient, user};
 use winrt_toast::{Toast, ToastDuration};
 use std::{fs::{self, File}, path::Path};
 use tokio::sync::{watch::{channel, Receiver}, RwLock};
-use simplelog::{Config, WriteLogger, TermLogger,TerminalMode, ColorChoice, CombinedLogger};
+use simplelog::{ColorChoice, CombinedLogger, ConfigBuilder, TermLogger, TerminalMode, WriteLogger};
 use tokio_tungstenite::tungstenite::error::{Error as ws_error, ProtocolError as protocol_error};
 use tao::{event_loop::{EventLoop, ControlFlow, EventLoopProxy}, window::Icon, system_tray::SystemTrayBuilder, menu::{ContextMenu, MenuItemAttributes}, event::{Event, TrayEvent}};
 
@@ -104,10 +104,16 @@ fn main() -> anyhow::Result<()> {
 	.and_then(|dir| fs::create_dir_all(dir).ok())
 	.expect("Created log directory");
 	
+	let log_config = ConfigBuilder::default()
+		.add_filter_ignore_str("reqwest::connect")
+		.add_filter_ignore_str("cookie_store::cookie_store")
+		.add_filter_ignore_str("strip_markdown")
+		.build();
+
 	let log_level = SETTINGS.get().unwrap().blocking_read().log_level;
 	CombinedLogger::init(vec![
-		TermLogger::new(log_level, Config::default(), TerminalMode::Mixed, ColorChoice::Auto),
-		WriteLogger::new(log_level, Config::default(), File::create(log_path)?)
+		TermLogger::new(log_level, log_config.clone(), TerminalMode::Mixed, ColorChoice::Auto),
+		WriteLogger::new(log_level, log_config, File::create(log_path)?)
 	])?;
 
 	init()?;
