@@ -54,9 +54,9 @@ impl Default for WebSocketClient {
 }
 
 impl WebSocketClient<Disconnected> {
-	pub async fn connect(self, token: &str) -> anyhow::Result<WebSocketClient<Connected>> {
+	pub async fn connect(self, url: &str, token: &str) -> anyhow::Result<WebSocketClient<Connected>> {
 		info!("Creating websocket");
-		let (socket, _) = connect_async("wss://ws2.onlyfans.com/ws3/30").await?;
+		let (socket, _) = connect_async(url).await?;
 		info!("Websocket created");
 		let mut connected_client = WebSocketClient { 
 			connection: Connected { socket }

@@ -12,6 +12,7 @@ pub struct Me {
 	pub id: u64,
 	pub username: String,
 	pub ws_auth_token: String,
+	pub ws_url: String
 }
 
 #[derive(Deserialize, Debug)]

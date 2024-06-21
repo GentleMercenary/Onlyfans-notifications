@@ -43,7 +43,7 @@ pub async fn make_connection(channel: EventLoopProxy<Events>, mut state: Receive
 	debug!("{:?}", me);
 	info!("Connecting as {}", me.name);
 	let mut socket = websocket_client::WebSocketClient::new()
-	.connect(&me.ws_auth_token).await?;
+	.connect(&me.ws_url, &me.ws_auth_token).await?;
 
 	channel.send_event(Events::Connected)?;
 	let res = {
