@@ -198,7 +198,7 @@ pub trait ToToast: content::Content {
 impl ToToast for content::Post {
 	fn to_toast(&self) -> Toast {
 		let mut toast = Toast::new();
-		toast.text2(&self.raw_text);
+		toast.text2(&self.text);
 
 		if let Some(price) = self.price && price > 0f32 {
 			toast

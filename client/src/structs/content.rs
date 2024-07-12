@@ -31,7 +31,7 @@ impl fmt::Display for ContentType {
 pub struct Post {
 	pub id: u64,
 	#[serde(deserialize_with = "de_markdown_string")]
-	pub raw_text: String,
+	pub text: String,
 	pub price: Option<f32>,
 	pub author: User,
 	#[serde(default)]

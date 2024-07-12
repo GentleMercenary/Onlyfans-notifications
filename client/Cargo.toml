@@ -7,17 +7,11 @@ edition = "2021"
 
 [dependencies]
 log = "0.4.17"
-
 futures = "0.3.21"
 futures-util = "0.3.21"
-
 strip_markdown = "0.2.0"
 serde = { version = "1.0.140", features = ["derive"] }
-
 rust-crypto = "0.2.36"
-rand = "0.8.5"
-rand_distr = "0.4.3"
-
 cached = { version = "0.51.4", features = ["async"] }
 chrono = "0.4.19"
 reqwest = { version = "0.12.5", features = ["cookies", "gzip", "json", "stream"] }

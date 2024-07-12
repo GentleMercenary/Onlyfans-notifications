@@ -1,14 +1,47 @@
 use anyhow::bail;
 use async_scoped::{spawner::use_tokio::Tokio, Scope, TokioScope};
-use of_client::{client::OFClient, structs::ClickStats};
+use chrono::Utc;
+use of_client::client::OFClient;
+use serde::Serialize;
 use crate::structs::socket;
 use rand::{rngs::StdRng, SeedableRng, Rng};
-use rand_distr::Exp1;
+use rand_distr::{Distribution, Exp1, Standard};
 use std::time::Duration;
 use futures::TryFutureExt;
 use tokio::{net::TcpStream, time::timeout};
 use futures_util::{SinkExt, StreamExt, Future};
 use tokio_tungstenite::{connect_async, MaybeTlsStream, WebSocketStream, tungstenite::Message};
+
+#[derive(Debug, Serialize)]
+enum Pages {
+	Collections,
+	Subscribes,
+	Profile,
+	Chats,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct ClickStats {
+	page: Pages,
+	block: &'static str,
+	event_time: String
+}
+
+impl Distribution<ClickStats> for Standard {
+	fn sample<R: rand::Rng + ?Sized>(&self, rng: &mut R) -> ClickStats {
+		ClickStats {
+			page: match rng.gen_range(0..=3) {
+				0 => Pages::Collections,
+				1 => Pages::Subscribes,
+				2 => Pages::Profile,
+				_ => Pages::Chats
+			},
+			block: "Menu",
+			event_time: Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Millis, true)
+		}
+	}
+}
 
 #[derive(Debug)]
 pub struct TimeoutExpired;
