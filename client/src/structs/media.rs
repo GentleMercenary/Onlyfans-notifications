@@ -13,51 +13,23 @@ pub enum MediaType {
 }
 
 #[derive(Deserialize, Debug)]
-#[serde(rename_all = "camelCase")]
-pub struct Post {
-	id: u64,
-	#[serde(rename = "type")]
-	media_type: MediaType,
-	full: Option<String>,
-	preview: Option<String>,
-	can_view: bool,
-	#[serde(default = "Utc::now")]
-	#[serde(deserialize_with = "de_str_to_date")]
-	created_at: DateTime<Utc>,
-}
-
-#[derive(Deserialize, Debug)]
-#[serde(rename_all = "camelCase")]
-pub struct Chat {
-	id: u64,
-	#[serde(rename = "type")]
-	media_type: MediaType,
-	src: Option<String>,
-	preview: Option<String>,
-	can_view: bool,
-	#[serde(default = "Utc::now")]
-	#[serde(deserialize_with = "de_str_to_date")]
-	created_at: DateTime<Utc>,
-}
-
-#[derive(Deserialize, Debug)]
-struct __Files {
+struct File {
 	url: Option<String>,
 }
 
 #[derive(Deserialize, Debug)]
-struct _Files {
-	source: __Files,
-	preview: __Files,
+struct Files {
+	full: File,
+	preview: Option<File>,
 }
 
 #[derive(Deserialize, Debug)]
 #[serde(rename_all = "camelCase")]
-pub struct Story {
+pub struct Feed {
 	id: u64,
 	#[serde(rename = "type")]
 	media_type: MediaType,
-	files: _Files,
+	files: Files,
 	can_view: bool,
 	#[serde(default = "Utc::now")]
 	#[serde(deserialize_with = "de_str_to_date")]
@@ -78,23 +50,9 @@ pub trait Media {
 	fn unix_time(&self) -> i64;
 }
 
-impl Media for Post {
-	fn source(&self) -> Option<&str> { self.full.as_deref() }
-	fn thumbnail(&self) -> Option<&str> { self.preview.as_deref() }
-	fn media_type(&self) -> &MediaType { &self.media_type }
-	fn unix_time(&self) -> i64 { self.created_at.timestamp() }
-}
-
-impl Media for Chat {
-	fn source(&self) -> Option<&str> { self.src.as_deref() }
-	fn thumbnail(&self) -> Option<&str> { self.preview.as_deref() }
-	fn media_type(&self) -> &MediaType { &self.media_type }
-	fn unix_time(&self) -> i64 { self.created_at.timestamp() }
-}
-
-impl Media for Story {
-	fn source(&self) -> Option<&str> { self.files.source.url.as_deref() }
-	fn thumbnail(&self) -> Option<&str> { self.files.preview.url.as_deref() }
+impl Media for Feed {
+	fn source(&self) -> Option<&str> { self.files.full.url.as_deref() }
+	fn thumbnail(&self) -> Option<&str> { self.files.preview.as_ref().and_then(|preview: &File| preview.url.as_deref()) }
 	fn media_type(&self) -> &MediaType { &self.media_type }
 	fn unix_time(&self) -> i64 { self.created_at.timestamp() }
 }

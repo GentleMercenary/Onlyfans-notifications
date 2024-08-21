@@ -40,7 +40,7 @@ pub struct Post {
 	#[serde(deserialize_with = "de_str_to_date")]
 	posted_at: DateTime<Utc>,
 	#[serde(default)]
-	media: Vec<media::Post>,
+	media: Vec<media::Feed>,
 }
 
 #[derive(Deserialize, Debug)]
@@ -52,9 +52,9 @@ pub struct Chat {
 	pub price: Option<f32>,
 	#[serde(default = "Utc::now")]
 	#[serde(deserialize_with = "de_str_to_date")]
-	posted_at: DateTime<Utc>,
+	created_at: DateTime<Utc>,
 	#[serde(default)]
-	media: Vec<media::Chat>,
+	media: Vec<media::Feed>,
 }
 
 #[derive(Deserialize, Debug)]
@@ -65,9 +65,9 @@ pub struct Story {
 	can_like: bool,
 	#[serde(default = "Utc::now")]
 	#[serde(deserialize_with = "de_str_to_date")]
-	posted_at: DateTime<Utc>,
+	created_at: DateTime<Utc>,
 	#[serde(default)]
-	media: Vec<media::Story>,
+	media: Vec<media::Feed>,
 }
 
 #[derive(Deserialize, Debug)]
@@ -118,7 +118,7 @@ impl CanLike for Post {
 }
 
 impl HasMedia for Post {
-	type Media = media::Post;
+	type Media = media::Feed;
 	fn media(&self) -> &[Self::Media] { &self.media }
 }
 
@@ -134,7 +134,7 @@ impl CanLike for Chat {
 }
 
 impl HasMedia for Chat {
-	type Media = media::Chat;
+	type Media = media::Feed;
 	fn media(&self) -> &[Self::Media] { &self.media }
 }
 
@@ -150,7 +150,7 @@ impl CanLike for Story {
 }
 
 impl HasMedia for Story {
-	type Media = media::Story;
+	type Media = media::Feed;
 	fn media(&self) -> &[Self::Media] { &self.media }
 }
 

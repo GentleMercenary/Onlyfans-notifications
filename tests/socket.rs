@@ -50,9 +50,9 @@ socket_test!(test_post_message,  r#"{
 	}
 }"#, socket::Message::Tagged(socket::TaggedMessage::PostPublished(_)));
 
-socket_test!(test_post_updated_message, r#"{"post_updated": "1234"}"#, socket::Message::Tagged(socket::TaggedMessage::PostUpdated(_)));
+socket_test!(test_post_updated_message, r#"{"post_updated": "492747400"}"#, socket::Message::Tagged(socket::TaggedMessage::PostUpdated(_)));
 
-socket_test!(test_post_expire_message, r#"{"post_expire": "1234"}"#, socket::Message::Tagged(socket::TaggedMessage::PostExpire(_)));
+socket_test!(test_post_expire_message, r#"{"post_expire": "492747400"}"#, socket::Message::Tagged(socket::TaggedMessage::PostExpire(_)));
 
 socket_test!(test_post_fundraising_message, r#"{
 	"post_fundraising_updated": {
@@ -81,8 +81,14 @@ socket_test!(test_chat_message, r#"{
 			{
 				"id": 0,
 				"canView": true,
-				"src": "https://raw.githubusercontent.com/allenbenz/winrt-notification/main/resources/test/chick.jpeg",
-				"preview": "https://raw.githubusercontent.com/allenbenz/winrt-notification/main/resources/test/flower.jpeg",
+				"files": {
+					"full": {
+						"url": "https://raw.githubusercontent.com/allenbenz/winrt-notification/main/resources/test/chick.jpeg"
+					},
+					"preview": {
+						"url": "https://raw.githubusercontent.com/allenbenz/winrt-notification/main/resources/test/flower.jpeg"
+					}
+				},
 				"type": "photo"
 			}
 		]
@@ -100,7 +106,7 @@ socket_test!(test_story_message, r#"{
 					"id": 0,
 					"canView": true,
 					"files": {
-						"source": {
+						"full": {
 							"url": "https://raw.githubusercontent.com/allenbenz/winrt-notification/main/resources/test/chick.jpeg"
 						},
 						"preview": {
