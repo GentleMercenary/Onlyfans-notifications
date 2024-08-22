@@ -15,9 +15,11 @@ pub fn de_str_to_date<'de, D>(deserializer: D) -> Result<DateTime<Utc>, D::Error
 where
 	D: Deserializer<'de>,
 {
-	let s: &str = Deserialize::deserialize(deserializer)?;
-	str_to_date(s)
-	.map_err(D::Error::custom)	
+	Deserialize::deserialize(deserializer)
+	.map_or(Ok(Utc::now()), |s| {
+		str_to_date(s)
+		.map_err(D::Error::custom)
+	})
 }
 
 pub fn de_markdown_string<'de, D>(deserializer: D) -> Result<String, D::Error>
