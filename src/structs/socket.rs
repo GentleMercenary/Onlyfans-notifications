@@ -1,7 +1,8 @@
-use crate::{MANAGER, SETTINGS, deserializers::{notification_message, from_string, de_str_to_date_opt}, settings::{Settings, ShouldNotify, ShouldDownload, ShouldLike}};
+use crate::{MANAGER, SETTINGS, deserializers::{notification_message, from_string, de_str_to_date_opt, de_clean_text}, settings::{Settings, ShouldNotify, ShouldDownload, ShouldLike}};
 
+use august::convert_unstyled;
 use chrono::{DateTime, Utc};
-use of_client::{user::User, content::{self, CanLike, HasMedia}, client::OFClient, media::{Media, MediaType}, deserializers::{de_markdown_string, de_str_to_date}};
+use of_client::{user::User, content::{self, CanLike, HasMedia}, client::OFClient, media::{Media, MediaType}, deserializers::de_str_to_date};
 use anyhow::bail;
 use serde::{Deserialize, Serialize};
 use futures::future::{join, join_all};
@@ -143,7 +144,7 @@ pub struct StreamStop {
 #[serde(rename_all = "camelCase")]
 pub struct StreamUpdate {
 	id: u64,
-	#[serde(deserialize_with = "de_markdown_string")]
+	#[serde(deserialize_with = "de_clean_text")]
 	raw_description: String,
 	is_active: bool,
 	is_finished: bool,
@@ -163,7 +164,7 @@ pub struct StreamUpdate {
 	#[serde(deserialize_with = "de_str_to_date_opt")]
 	scheduled_at: Option<DateTime<Utc>>,
 	duration: u64,
-	#[serde(deserialize_with = "de_markdown_string")]
+	#[serde(deserialize_with = "de_clean_text")]
 	tips_goal: String,
 }
 
@@ -180,7 +181,7 @@ pub struct StreamLook {
 pub struct StreamComment {
 	stream_user_id: u64,
 	comment_id: u64,
-	#[serde(deserialize_with = "de_markdown_string")]
+	#[serde(deserialize_with = "de_clean_text")]
 	comment: String,
 	user: User
 }
@@ -198,7 +199,7 @@ pub trait ToToast: content::Content {
 impl ToToast for content::Post {
 	fn to_toast(&self) -> Toast {
 		let mut toast = Toast::new();
-		toast.text2(&self.text);
+		toast.text2(convert_unstyled(&self.text, usize::MAX));
 
 		if let Some(price) = self.price && price > 0f32 {
 			toast
@@ -213,7 +214,7 @@ impl ToToast for content::Post {
 impl ToToast for content::Chat {
 	fn to_toast(&self) -> Toast {
 		let mut toast = Toast::new();
-		toast.text2(&self.text);
+		toast.text2(convert_unstyled(&self.text, usize::MAX));
 
 		if let Some(price) = self.price && price > 0f32 {
 			toast
@@ -234,7 +235,7 @@ impl ToToast for content::Story {
 impl ToToast for content::Notification {
 	fn to_toast(&self) -> Toast {
 		let mut toast = Toast::new();
-		toast.text2(&self.text);
+		toast.text2(convert_unstyled(&self.text, usize::MAX));
 		
 		toast
 	}
@@ -245,7 +246,7 @@ impl ToToast for content::Stream {
 		let mut toast = Toast::new();
 
 		toast
-		.text2(&self.description);
+		.text2(convert_unstyled(&self.description, usize::MAX));
 
 		toast
 	}
@@ -373,7 +374,7 @@ async fn notify_with_thumbnail<T: ToToast + HasMedia>(content: &T, user: &User, 
 
 		toast
 		.header(Header::new(&header, &header, ""))
-		.text1(&user.name)
+		.text1(convert_unstyled(&user.name, usize::MAX))
 		.with_avatar(user, client).await?
 		.with_thumbnail(content.media(), client).await?;
 

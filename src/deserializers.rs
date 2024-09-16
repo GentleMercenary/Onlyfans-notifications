@@ -1,5 +1,6 @@
 use std::{str::FromStr, fmt::Display};
 
+use august::convert_unstyled;
 use chrono::{DateTime, Utc};
 use log::LevelFilter;
 use of_client::deserializers::str_to_date;
@@ -17,6 +18,13 @@ where
 	}
 
 	Outer::deserialize(deserializer).map(|outer| outer.new_message)
+}
+
+pub fn de_clean_text<'de, D>(deserializer: D) -> Result<String, D::Error>
+where
+	D: Deserializer<'de>,
+{
+	String::deserialize(deserializer).map(|s| convert_unstyled(&s, usize::MAX))
 }
 
 pub fn from_string<'de, T, D>(deserializer: D) -> Result<T, D::Error>

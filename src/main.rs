@@ -107,7 +107,7 @@ fn main() -> anyhow::Result<()> {
 	let log_config = ConfigBuilder::default()
 		.add_filter_ignore_str("reqwest::connect")
 		.add_filter_ignore_str("cookie_store::cookie_store")
-		.add_filter_ignore_str("strip_markdown")
+		.add_filter_ignore_str("html5ever")
 		.build();
 
 	let log_level = SETTINGS.get().unwrap().blocking_read().log_level;

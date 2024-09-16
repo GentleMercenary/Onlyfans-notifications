@@ -1,4 +1,4 @@
-use crate::{client::OFClient, deserializers::de_markdown_string};
+use crate::client::OFClient;
 
 use std::fmt;
 use serde::Deserialize;
@@ -7,7 +7,6 @@ use futures_util::TryFutureExt;
 #[derive(Deserialize, Debug)]
 #[serde(rename_all = "camelCase")]
 pub struct Me {
-	#[serde(deserialize_with = "de_markdown_string")]
 	pub name: String,
 	pub id: u64,
 	pub username: String,
@@ -43,8 +42,12 @@ pub struct Subscriptions {
 	pub bookmarks: u32,
 }
 
+pub trait IDType : fmt::Display {}
+impl IDType for &str {}
+impl IDType for u64 {}
+
 impl OFClient {
-	pub async fn get_user<S: fmt::Display>(&self, user_id: S) -> reqwest::Result<User> {
+	pub async fn get_user<I: IDType>(&self, user_id: I) -> reqwest::Result<User> {
 		self.get(&format!("https://onlyfans.com/api2/v2/users/{user_id}"))
 		.and_then(|response| response.json::<User>().map_err(Into::into))
 		.await
@@ -52,7 +55,7 @@ impl OFClient {
 		.inspect_err(|err| error!("Error reading user {user_id}: {err:?}"))
 	}
 
-	pub async fn subscribe<S: fmt::Display>(&self, user_id: S) -> reqwest::Result<User> {
+	pub async fn subscribe<I: IDType>(&self, user_id: I) -> reqwest::Result<User> {
 		self.post(&format!("https://onlyfans.com/api2/v2/users/{user_id}/subscribe"), None::<&()>)
 		.and_then(|response| response.json::<User>())
 		.await

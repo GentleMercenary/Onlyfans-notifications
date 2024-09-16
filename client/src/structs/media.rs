@@ -1,3 +1,5 @@
+#![allow(dead_code)]
+
 use crate::deserializers::de_str_to_date;
 
 use serde::Deserialize;

@@ -1,4 +1,6 @@
-use crate::{deserializers::{de_markdown_string, de_str_to_date}, client::OFClient, media, user::User};
+#![allow(dead_code)]
+
+use crate::{deserializers::de_str_to_date, client::OFClient, media, user::User};
 
 use std::{slice, fmt};
 use futures_util::TryFutureExt;
@@ -30,7 +32,6 @@ impl fmt::Display for ContentType {
 #[serde(rename_all = "camelCase")]
 pub struct Post {
 	pub id: u64,
-	#[serde(deserialize_with = "de_markdown_string")]
 	pub text: String,
 	pub price: Option<f32>,
 	pub author: User,
@@ -47,7 +48,6 @@ pub struct Post {
 #[serde(rename_all = "camelCase")]
 pub struct Chat {
 	pub id: u64,
-	#[serde(deserialize_with = "de_markdown_string")]
 	pub text: String,
 	pub price: Option<f32>,
 	#[serde(default = "Utc::now")]
@@ -74,7 +74,6 @@ pub struct Story {
 #[serde(rename_all = "camelCase")]
 pub struct Notification {
 	id: String,
-	#[serde(deserialize_with = "de_markdown_string")]
 	pub text: String,
 }
 
@@ -82,7 +81,6 @@ pub struct Notification {
 #[serde(rename_all = "camelCase")]
 pub struct Stream {
 	id: u64,
-	#[serde(deserialize_with = "de_markdown_string")]
 	pub description: String,
 	room: String,
 	#[serde(default = "Utc::now")]

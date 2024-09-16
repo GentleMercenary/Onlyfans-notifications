@@ -3,7 +3,6 @@ use crate::client::Cookie;
 use serde::de::Error;
 use chrono::{DateTime, ParseResult, Utc};
 use std::collections::HashMap;
-use strip_markdown::strip_markdown;
 use serde::{Deserialize, Deserializer};
 
 pub fn str_to_date(s: &str) -> ParseResult<DateTime<Utc>> {
@@ -20,13 +19,6 @@ where
 		str_to_date(s)
 		.map_err(D::Error::custom)
 	})
-}
-
-pub fn de_markdown_string<'de, D>(deserializer: D) -> Result<String, D::Error>
-where
-	D: Deserializer<'de>,
-{
-	String::deserialize(deserializer).map(|s| strip_markdown(&s))
 }
 
 pub fn parse_cookie<'de, D>(deserializer: D) -> Result<Cookie, D::Error>
