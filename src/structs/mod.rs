@@ -1,10 +1,11 @@
 #![allow(dead_code)]
 
-use std::{path::{Path, PathBuf}, fs::{File, self}, io::{BufWriter, Write}};
+use std::{fs::{self, File}, io::{BufWriter, Write}, path::{Path, PathBuf}};
 
 use anyhow::{anyhow, Context};
-use futures_util::{TryFutureExt, StreamExt};
-use of_client::{client::OFClient, user::User, Url, IntoUrl, media::{self, MediaType}};
+use filetime::{set_file_mtime, FileTime};
+use futures_util::StreamExt;
+use of_client::{client::OFClient, httpdate::parse_http_date, media::{self, MediaType}, user::User, reqwest::{Url, IntoUrl, header, StatusCode}};
 use winrt_toast::{Toast, Image, content::image::{ImageHintCrop, ImagePlacement}};
 
 use crate::TEMPDIR;
@@ -75,29 +76,38 @@ pub async fn fetch_file<U: IntoUrl>(client: &OFClient, link: U, path: &Path, fil
 
 	let (filename, extension) = filename.rsplit_once('.').unwrap_or((filename, "temp"));
 	let final_path = path.join(filename).with_extension(extension);
+	if !final_path.exists() { fs::create_dir_all(path)?; }
 
-	if !final_path.exists() {
-		fs::create_dir_all(path)?;
-		let temp_path = final_path.with_extension("temp");
-		let mut writer = File::create(&temp_path)
-			.map(BufWriter::new)
-			.context(format!("Created file at {:?}", temp_path))?;
+	let file_modify_date = final_path.metadata().and_then(|metadata| metadata.modified()).ok();
 
-		client.get(url)
-		.map_err(Into::into)
-		.and_then(|response| async move {
-			let mut stream = response.bytes_stream();
-			while let Some(item) = stream.next().await {
-				let chunk = item.context("Error while downloading file")?;
-				writer.write_all(&chunk).context("Error writing file")?;
-			}
-			writer.flush()?;
-			Ok(())
-		})
-		.await
-		.inspect_err(|err| error!("{err:?}"))
-		.and_then(|_| fs::rename(&temp_path, &final_path).context(format!("Renamed {:?} to {:?}", temp_path.file_name(), final_path.file_name())))
-		.inspect_err(|err| error!("Error renaming file: {err:?}"))?;
+	let response = {
+		if let Some(date) = file_modify_date {
+			let resp = client.get_if_modified_since(url, date).await?;
+			if resp.status() == StatusCode::NOT_MODIFIED { return Ok((true, final_path)) }
+			else { resp }
+		} else { client.get(url).await? }
+	};
+
+	let last_modified_header = response.headers().get(header::LAST_MODIFIED).cloned();
+
+	let temp_path = final_path.with_extension("temp");
+	let mut writer = File::create(&temp_path)
+		.map(BufWriter::new)
+		.context(format!("Created file at {:?}", temp_path))?;
+
+	let mut stream = response.bytes_stream();
+	while let Some(item) = stream.next().await {
+		let chunk = item.context("Error while downloading file")?;
+		writer.write_all(&chunk).context("Error writing file")?;
+	}
+	writer.flush()?;
+
+	fs::rename(&temp_path, &final_path).context(format!("Renamed {:?} to {:?}", temp_path.file_name(), final_path.file_name()))?;
+
+	if let Some(modified) = last_modified_header {
+		if let Some(date) = modified.to_str().ok().and_then(|s| parse_http_date(s).ok()) {
+			set_file_mtime(&final_path, FileTime::from_system_time(date)).context("Error setting file modified date")?;
+		}
 	}
 
 	Ok((final_path.exists(), final_path))

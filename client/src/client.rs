@@ -1,5 +1,6 @@
 use crate::deserializers::{parse_cookie, non_empty_string};
 
+use httpdate::fmt_http_date;
 use serde::{Deserialize, Serialize};
 use cached::proc_macro::once;
 use futures::TryFutureExt;
@@ -144,6 +145,14 @@ impl OFClient {
 	pub async fn get<U: IntoUrl>(&self, link: U) -> reqwest::Result<Response> {
 		self.request(Method::GET, link)
 		.await?
+		.send()
+		.and_then(error_for_status_log)
+		.await
+	}
+
+	pub async fn get_if_modified_since<U: IntoUrl>(&self, link: U, modified_date: SystemTime) -> reqwest::Result<Response> {
+		self.request(Method::GET, link).await?
+		.header(header::IF_MODIFIED_SINCE, HeaderValue::from_str(&fmt_http_date(modified_date)).unwrap())
 		.send()
 		.and_then(error_for_status_log)
 		.await

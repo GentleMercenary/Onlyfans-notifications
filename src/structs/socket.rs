@@ -6,7 +6,6 @@ use of_client::{user::User, content::{self, CanLike, HasMedia}, client::OFClient
 use anyhow::bail;
 use serde::{Deserialize, Serialize};
 use futures::future::{join, join_all};
-use filetime::{FileTime, set_file_mtime};
 use futures_util::future::join3;
 use std::path::Path;
 use winrt_toast::{Toast, Text, content::text::TextPlacement, Header};
@@ -383,7 +382,7 @@ async fn notify_with_thumbnail<T: ToToast + HasMedia>(content: &T, user: &User, 
 	Ok(())
 }
 
-async fn download<T: ToToast + HasMedia>(content: &T, user: &User, client: &OFClient, settings: &Settings) {
+async fn download<T: HasMedia>(content: &T, user: &User, client: &OFClient, settings: &Settings) {
 	if content.should_download(&user.username, settings) {
 		let header = T::content_type().to_string();
 		let content_path = Path::new("data").join(&user.username).join(&header);
@@ -399,12 +398,6 @@ async fn download<T: ToToast + HasMedia>(content: &T, user: &User, client: &OFCl
 				fetch_file(client, url, &path, None)
 				.await
 				.inspect_err(|err| error!("Download failed: {err}"))
-				.map(|(downloaded, path)| {
-					if downloaded {
-						let _ = set_file_mtime(path, FileTime::from_unix_time(media.unix_time(), 0))
-							.inspect_err(|err| warn!("Error setting file modify time: {err}"));
-					}
-				})
 			})
 		}))
 		.await;

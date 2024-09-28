@@ -7,8 +7,6 @@ pub mod structs;
 pub mod client;
 pub mod deserializers;
 
-pub use structs::content;
-pub use structs::media;
-pub use structs::user;
-pub use reqwest::Url;
-pub use reqwest::IntoUrl;
+pub use reqwest;
+pub use httpdate;
+pub use structs::{content, media, user};
