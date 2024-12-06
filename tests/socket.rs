@@ -65,11 +65,10 @@ socket_test!(test_post_fundraising_message, r#"{
 	}
 }"#, socket::Message::Tagged(socket::TaggedMessage::PostFundraisingUpdated(_)));
 
-
 socket_test!(test_chat_message, r#"{
 	"api2_chat_message": {
 		"id": 0,
-		"text": "This is a message<br />\n to test <a href = \"/onlyfans\">MARKDOWN parsing</a> 👌<br />\n in notifications 💯",
+		"text": "<p>This is a message</p><p><br />testing <a href = \"/onlyfans\">MARKDOWN parsing</a> 👌<br />\n in notifications 💯</p>",
 		"price": 3.99,
 		"fromUser": {
 			"avatar": "https://public.onlyfans.com/files/m/mk/mka/mkamcrf6rjmcwo0jj4zoavhmalzohe5a1640180203/avatar.jpg",
