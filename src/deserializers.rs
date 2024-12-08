@@ -5,15 +5,15 @@ use log::LevelFilter;
 use of_client::deserializers::str_to_date;
 use serde::{Deserialize, Deserializer};
 
-use crate::structs::socket;
+use crate::structs;
 
-pub fn notification_message<'de, D>(deserializer: D) -> Result<socket::Notification, D::Error>
+pub fn notification_message<'de, D>(deserializer: D) -> Result<structs::Notification, D::Error>
 where
 	D: Deserializer<'de>,
 {
 	#[derive(Deserialize)]
 	struct Outer {
-		new_message: socket::Notification,
+		new_message: structs::Notification,
 	}
 
 	Outer::deserialize(deserializer).map(|outer| outer.new_message)

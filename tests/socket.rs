@@ -1,6 +1,6 @@
 mod init;
 
-use of_notifier::{get_auth_params, structs::socket, init, SETTINGS, settings::{Settings, Selection, CoarseSelection}};
+use of_notifier::{get_auth_params, settings::{Settings, Selection, CoarseSelection}, structs::{Message, TaggedMessage}, handlers::handle_message};
 use of_client::client::OFClient;
 use std::thread::sleep;
 use std::time::Duration;
@@ -11,18 +11,7 @@ use init::init_log;
 static INIT: Once = Once::new();
 
 fn test_init() {
-	INIT.call_once(|| {
-		init().unwrap();
-
-		SETTINGS
-		.set(RwLock::new(Settings {
-			notify: Selection::Coarse(CoarseSelection::from(true)),
-			..Settings::default()
-		}))
-		.unwrap();
-
-		init_log();
-	});
+	INIT.call_once(|| { init_log(); });
 }
 
 macro_rules! socket_test {
@@ -31,28 +20,33 @@ macro_rules! socket_test {
 		async fn $name() {
 			test_init();
 
-			let msg = serde_json::from_str::<socket::Message>($incoming).unwrap();
+			let settings = RwLock::new(Settings {
+				notify: Selection::Coarse(CoarseSelection::from(true)),
+				..Settings::default()
+			});
+
+			let msg = serde_json::from_str::<Message>($incoming).unwrap();
 			assert!(matches!(msg, $match));
 	
 			let params = get_auth_params().unwrap();
-			let client = OFClient::new(params).await.unwrap();
-			msg.handle_message(&client).await.unwrap();
+			let client = OFClient::new(params).unwrap();
+			handle_message(msg, &client, &settings).await.unwrap();
 			sleep(Duration::from_millis(1000));
 		}
 	};
 }
 
-socket_test!(test_post_message,  r#"{
+socket_test!(test_post_message, r#"{
 	"post_published": {
 		"id": "492747400",
 		"user_id" : "15585607",
 		"show_posts_in_feed":true
 	}
-}"#, socket::Message::Tagged(socket::TaggedMessage::PostPublished(_)));
+}"#, Message::Tagged(TaggedMessage::PostPublished(_)));
 
-socket_test!(test_post_updated_message, r#"{"post_updated": "492747400"}"#, socket::Message::Tagged(socket::TaggedMessage::PostUpdated(_)));
+socket_test!(test_post_updated_message, r#"{"post_updated": "492747400"}"#, Message::Tagged(TaggedMessage::PostUpdated(_)));
 
-socket_test!(test_post_expire_message, r#"{"post_expire": "492747400"}"#, socket::Message::Tagged(socket::TaggedMessage::PostExpire(_)));
+socket_test!(test_post_expire_message, r#"{"post_expire": "492747400"}"#, Message::Tagged(TaggedMessage::PostExpire(_)));
 
 socket_test!(test_post_fundraising_message, r#"{
 	"post_fundraising_updated": {
@@ -63,7 +57,7 @@ socket_test!(test_post_fundraising_message, r#"{
 			"presets": ["10","20","50","100"]
 		}
 	}
-}"#, socket::Message::Tagged(socket::TaggedMessage::PostFundraisingUpdated(_)));
+}"#, Message::Tagged(TaggedMessage::PostFundraisingUpdated(_)));
 
 socket_test!(test_chat_message, r#"{
 	"api2_chat_message": {
@@ -92,7 +86,7 @@ socket_test!(test_chat_message, r#"{
 			}
 		]
 	}
-}"#, socket::Message::Tagged(socket::TaggedMessage::Api2ChatMessage(_)));
+}"#, Message::Tagged(TaggedMessage::Api2ChatMessage(_)));
 
 socket_test!(test_story_message, r#"{
 	"stories": [
@@ -117,7 +111,7 @@ socket_test!(test_story_message, r#"{
 			]
 		}
 	]
-}"#, socket::Message::Tagged(socket::TaggedMessage::Stories(_)));
+}"#, Message::Tagged(TaggedMessage::Stories(_)));
 
 socket_test!(test_story_tips_message, r#"{
 	"story_tips": {
@@ -132,7 +126,7 @@ socket_test!(test_story_tips_message, r#"{
 		"amount_human": "$10.00",
 		"message": "Test tip"
 	}
-}"#, socket::Message::Tagged(socket::TaggedMessage::StoryTips(_)));
+}"#, Message::Tagged(TaggedMessage::StoryTips(_)));
 
 socket_test!(test_notification_message, r#"{
 	"new_message":{
@@ -152,7 +146,7 @@ socket_test!(test_notification_message, r#"{
 		}
 	},
 	"hasSystemNotifications": false
-	}"#, socket::Message::NewMessage(_));
+	}"#, Message::NewMessage(_));
 
 socket_test!(test_stream_message, r#"{
 	"stream": {
@@ -169,21 +163,21 @@ socket_test!(test_stream_message, r#"{
 			"username": "onlyfans"
 		}
 	}
-}"#, socket::Message::Tagged(socket::TaggedMessage::Stream(_)));
+}"#, Message::Tagged(TaggedMessage::Stream(_)));
 
 socket_test!(test_stream_start_message, r#"{
 	"stream_start": {
 		"stream_id": "1234",
 		"userId": 15585607
 	}
-}"#, socket::Message::Tagged(socket::TaggedMessage::StreamStart(_)));
+}"#, Message::Tagged(TaggedMessage::StreamStart(_)));
 
 socket_test!(test_stream_stop_message, r#"{
 	"stream_stop":{
 	"stream_id": "1234",
 	"stream_user_id": "15585607"
 	}
-}"#, socket::Message::Tagged(socket::TaggedMessage::StreamStop(_)));
+}"#, Message::Tagged(TaggedMessage::StreamStop(_)));
 
 socket_test!(test_stream_update_message, r#"{
 	"stream_update": {
@@ -213,7 +207,7 @@ socket_test!(test_stream_update_message, r#"{
 		"duration": 0,
 		"tipsGoal": "stream tip goal"
 	}
-}"#, socket::Message::Tagged(socket::TaggedMessage::StreamUpdate(_)));
+}"#, Message::Tagged(TaggedMessage::StreamUpdate(_)));
 
 socket_test!(test_stream_look_message, r#"{
 	"stream_look": {
@@ -227,7 +221,7 @@ socket_test!(test_stream_look_message, r#"{
 		"total": 9001,
 		"viewer_instance_count": 42
 	}
-}"#, socket::Message::Tagged(socket::TaggedMessage::StreamLook(_)));
+}"#, Message::Tagged(TaggedMessage::StreamLook(_)));
 
 socket_test!(test_stream_unlook_message, r#"{
 	"stream_unlook": {
@@ -242,7 +236,7 @@ socket_test!(test_stream_unlook_message, r#"{
 			"username": "onlyfans"
 		}
 	}
-}"#, socket::Message::Tagged(socket::TaggedMessage::StreamUnlook(_)));
+}"#, Message::Tagged(TaggedMessage::StreamUnlook(_)));
 
 socket_test!(test_stream_comment_message, r#"{
 	"stream_comment": {
@@ -257,7 +251,7 @@ socket_test!(test_stream_comment_message, r#"{
 			"username": "onlyfans"
 		}
 	}
-}"#, socket::Message::Tagged(socket::TaggedMessage::StreamComment(_)));
+}"#, Message::Tagged(TaggedMessage::StreamComment(_)));
 
 socket_test!(test_stream_like_message, r#"{
 	"stream_like": {
@@ -265,10 +259,10 @@ socket_test!(test_stream_like_message, r#"{
 		"x": 0,
 		"y": 0
 	}
-}"#, socket::Message::Tagged(socket::TaggedMessage::StreamLike(_)));
+}"#, Message::Tagged(TaggedMessage::StreamLike(_)));
 
 socket_test!(test_chat_count_message, r#"{
 	"chat_messages": 3,
 	"count_priority_chat": 2,
 	"unread_tips": 1
-}"#, socket::Message::ChatCount(_));
+}"#, Message::ChatCount(_));

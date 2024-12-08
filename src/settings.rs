@@ -1,15 +1,14 @@
 use std::collections::HashSet;
-
 use log::LevelFilter;
-use of_client::content::{ContentType, self};
+use of_client::content::ContentType;
 use crate::deserializers::de_log_level;
 use serde::Deserialize;
 
-fn default_log_level() -> LevelFilter {
+const fn default_log_level() -> LevelFilter {
 	LevelFilter::Info
 }
 
-#[derive(Deserialize, Debug, Clone)]
+#[derive(Deserialize, Debug)]
 #[serde(untagged)]
 pub enum CoarseSelection {
 	Whitelist(HashSet<String>),
@@ -56,21 +55,21 @@ impl CoarseSelection {
 
 impl From<bool> for CoarseSelection {
 	fn from(value: bool) -> Self {
-		CoarseSelection::All(value)
+		Self::All(value)
 	}
 }
 
 impl Default for CoarseSelection {
 	fn default() -> Self {
-		CoarseSelection::from(false)
+		Self::from(false)
 	}
 }
 
 impl Selection {
 	pub fn enabled_for(&self, username: &str, content_type: ContentType) -> bool {
 		match self {
-			Selection::Coarse(coarse) => coarse.enabled_for(username),
-			Selection::Granular(granular) => match content_type {
+			Self::Coarse(coarse) => coarse.enabled_for(username),
+			Self::Granular(granular) => match content_type {
 				ContentType::Posts => granular.posts.enabled_for(username),
 				ContentType::Chats => granular.messages.enabled_for(username),
 				ContentType::Stories => granular.stories.enabled_for(username),
@@ -83,42 +82,12 @@ impl Selection {
 
 impl Default for Settings {
 	fn default() -> Self {
-		Settings {
+		Self {
 			notify: Selection::Coarse(CoarseSelection::default()),
 			download: Selection::Coarse(CoarseSelection::default()),
 			like: Selection::Coarse(CoarseSelection::default()),
 			reconnect: true,
 			log_level: default_log_level()
 		}
-	}
-}
-
-pub trait ShouldNotify {
-	fn should_notify(&self, username: &str, settings: &Settings) -> bool;
-}
-
-pub trait ShouldDownload {
-	fn should_download(&self, username: &str, settings: &Settings) -> bool;
-}
-
-pub trait ShouldLike {
-	fn should_like(&self, username: &str, settings: &Settings) -> bool;
-}
-
-impl<T: content::Content> ShouldNotify for T {
-	fn should_notify(&self, username: &str, settings: &Settings) -> bool {
-		settings.notify.enabled_for(username, T::content_type())
-	}
-}
-
-impl<T: content::HasMedia> ShouldDownload for T {
-	fn should_download(&self, username: &str, settings: &Settings) -> bool {
-		settings.download.enabled_for(username, T::content_type())
-	}
-}
-
-impl<T: content::CanLike> ShouldLike for T {
-	fn should_like(&self, username: &str, settings: &Settings) -> bool {
-		settings.like.enabled_for(username, T::content_type())
 	}
 }

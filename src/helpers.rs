@@ -1,28 +1,26 @@
 #![allow(dead_code)]
 
-use std::{fs::{self, File}, io::{BufWriter, Write}, path::{Path, PathBuf}};
+use std::{fs::{self, File}, io::{BufWriter, Write}, path::{Path, PathBuf}, sync::{Mutex, OnceLock}};
 
-use anyhow::{anyhow, Context};
+use anyhow::{anyhow, Context, Ok};
 use filetime::{set_file_mtime, FileTime};
 use futures_util::StreamExt;
-use of_client::{client::OFClient, httpdate::parse_http_date, media::{self, MediaType}, user::User, reqwest::{Url, IntoUrl, header, StatusCode}};
-use winrt_toast::{Toast, Image, content::image::{ImageHintCrop, ImagePlacement}};
+use of_client::{client::OFClient, content, httpdate::parse_http_date, media::{Media, MediaType}, reqwest::{header, IntoUrl, StatusCode, Url}, user::User};
+use tempdir::TempDir;
+use winrt_toast::{register, Toast, ToastManager};
 
-use crate::TEMPDIR;
-pub mod socket;
+use crate::get_auth_params;
 
-
-trait ToastExt {
-	async fn with_avatar(&mut self, user: &User, client: &OFClient) -> anyhow::Result<&mut Self>;
-	async fn with_thumbnail<T: media::Media + Sync>(&mut self, media: &[T], client: &OFClient) -> anyhow::Result<&mut Self>;
+pub fn init_client() -> anyhow::Result<OFClient> {
+	info!("Reading authentication parameters");
+	let auth_params = get_auth_params()?;
+	let client = OFClient::new(auth_params)?;
+	Ok(client)
 }
 
-impl ToastExt for Toast {
-	async fn with_avatar(&mut self, user: &User, client: &OFClient) -> anyhow::Result<&mut Self> {
-		let user_path = Path::new("data").join(&user.username);
-		let mut ret = self;
-
-		if let Some(avatar) = &user.avatar {
+pub async fn get_avatar(user: &User, client: &OFClient) -> anyhow::Result<Option<PathBuf>> {
+	match &user.avatar {
+		Some(avatar) => {
 			let filename = Url::parse(avatar)?
 				.path_segments()
 				.and_then(|segments| {
@@ -33,34 +31,32 @@ impl ToastExt for Toast {
 					Option::zip(filename, ext).map(|(filename, ext)| [filename, ext].join("."))
 				})
 				.ok_or_else(|| anyhow!("Filename unknown"))?;
-		
+	
+			let user_path = Path::new("data").join(&user.username);
 			let (_, avatar) = fetch_file(client, avatar, &user_path.join("Profile").join("Avatars"), Some(&filename)).await?;
+			Ok(Some(avatar))
+		},
+		None => Ok(None)
+	}
+}
 
-			ret = ret.image(1,
-				Image::new_local(avatar.canonicalize()?)?
-				.with_hint_crop(ImageHintCrop::Circle)
-				.with_placement(ImagePlacement::AppLogoOverride),
-			);
-		}
+pub async fn get_thumbnail<T: content::HasMedia>(content: &T, client: &OFClient) -> anyhow::Result<Option<PathBuf>> {
+	let thumb = content
+	.media()
+	.iter()
+	.filter(|media| media.media_type() != &MediaType::Audio)
+	.find_map(|media| media.thumbnail().filter(|s| !s.is_empty()));
 
-		Ok(ret)
+	match thumb {
+		Some(thumb) => {
+			static TEMPDIR: OnceLock<TempDir> = OnceLock::new();
+			let temp_dir = TEMPDIR.get_or_init(|| TempDir::new("OF_thumbs").expect("Creating temporary directory"));
+			let (_, path) = fetch_file(client, thumb, temp_dir.path(), None).await?;
+			Ok(Some(path))
+		},
+		None => Ok(None)
 	}
 
-	async fn with_thumbnail<T: media::Media + Sync>(&mut self, media: &[T], client: &OFClient) -> anyhow::Result<&mut Self> {
-		let thumb = media
-			.iter()
-			.filter(|media| media.media_type() != &MediaType::Audio)
-			.find_map(|media| media.thumbnail().filter(|s| !s.is_empty()));
-		
-		let mut ret = self;
-
-		if let Some(thumb) = thumb {
-			let (_, path) = fetch_file(client, thumb, TEMPDIR.get().unwrap().path(), None).await?;
-			ret = ret.image(2, Image::new_local(path)?);
-		}
-
-		Ok(ret)
-	}
 }
 
 pub async fn fetch_file<U: IntoUrl>(client: &OFClient, link: U, path: &Path, filename: Option<&str>) -> anyhow::Result<(bool, PathBuf)> {
@@ -111,4 +107,23 @@ pub async fn fetch_file<U: IntoUrl>(client: &OFClient, link: U, path: &Path, fil
 	}
 
 	Ok((final_path.exists(), final_path))
+}
+
+pub fn show_notification(toast: &Toast) -> winrt_toast::Result<()> {
+	static MANAGER: OnceLock<Mutex<ToastManager>> = OnceLock::new();
+	let manager_mutex = MANAGER.get_or_init(|| {
+		let aum_id = "OFNotifier";
+		let icon_path = Path::new("icons").join("icon.ico").canonicalize()
+			.inspect_err(|err| error!("{err}"))
+			.unwrap();
+	
+		register(aum_id, "OF notifier", Some(icon_path.as_path()))
+		.inspect_err(|err| error!("{err}"))
+		.unwrap();
+		
+		Mutex::new(ToastManager::new(aum_id))
+	});
+
+	let manager = manager_mutex.lock().unwrap();
+	manager.show(toast)
 }

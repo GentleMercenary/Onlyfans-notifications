@@ -6,9 +6,9 @@ use cached::proc_macro::once;
 use futures::TryFutureExt;
 use crypto::{digest::Digest, sha1::Sha1};
 use reqwest::{cookie::Jar, header::{self, HeaderValue}, Client, Response, Url, Method, RequestBuilder, IntoUrl};
-use std::{sync::Arc, time::{SystemTime, UNIX_EPOCH}, collections::HashMap};
+use std::{collections::HashMap, sync::{Arc, RwLock}, time::{SystemTime, UNIX_EPOCH}};
 
-#[derive(Debug, Clone)]
+#[derive(Debug)]
 pub struct Cookie {
 	pub sess: String,
 	pub auth_id: String,
@@ -44,47 +44,47 @@ pub struct AuthParams {
 struct DynamicRules {
 	app_token: String,
 	static_param: String,
-	format: String,
+	prefix: String,
+	suffix: String,
 	checksum_constant: i32,
 	checksum_indexes: Vec<usize>,
 }
 
 #[once(time = 3600, result = true)]
 async fn get_dynamic_rules() -> reqwest::Result<DynamicRules> {
-	reqwest::get("https://raw.githubusercontent.com/xagler/dynamic-rules/main/onlyfans.json")
+	reqwest::get("https://raw.githubusercontent.com/deviint/onlyfans-dynamic-rules/main/dynamicRules.json")
 	.inspect_err(|err| error!("Error getting dynamic rules: {err:?}"))
 	.and_then(Response::json::<DynamicRules>)
 	.await
 	.inspect_err(|err| error!("Error reading dynamic rules: {err:?}"))
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct OFClient {
-	client: Client, params: AuthParams,
+	client: Client, params: Arc<RwLock<AuthParams>>,
 }
 
 impl OFClient {
-	pub async fn new(params: AuthParams) -> reqwest::Result<Self> {
+	pub fn new(params: AuthParams) -> reqwest::Result<Self> {
 		let cookie_jar = Jar::from(&params.cookie);
-
-		let mut headers = header::HeaderMap::new();
-		headers.insert(header::ACCEPT, HeaderValue::from_static("application/json, text/plain, */*"));
-		headers.insert(header::USER_AGENT, HeaderValue::from_str(&params.user_agent).unwrap());
-		headers.insert("x-bc", HeaderValue::from_str(&params.x_bc).unwrap());
-		headers.insert("user-id", HeaderValue::from_str(&params.cookie.auth_id).unwrap());
 
 		let client = reqwest::Client::builder()
 		.cookie_store(true)
 		.cookie_provider(Arc::new(cookie_jar))
 		.gzip(true)
-		.default_headers(headers)
 		.build()?;
 
-		Ok(OFClient { client, params })
+		Ok(OFClient { client, params: Arc::new(RwLock::new(params)) })
+	}
+
+	pub fn set_auth_params(&mut self, params: AuthParams) {
+		let mut self_params = self.params.write().unwrap();
+		*self_params = params;
 	}
 
 	pub async fn make_headers<U: IntoUrl>(&self, link: U) -> reqwest::Result<header::HeaderMap> {
 		let dynamic_rules = get_dynamic_rules().await?;
+		let params = self.params.read().unwrap();
 
 		let url: Url = link.into_url()?;
 		let mut url_param = url.path().to_string();
@@ -104,7 +104,7 @@ impl OFClient {
 			dynamic_rules.static_param.as_str(),
 			&time,
 			&url_param,
-			&self.params.cookie.auth_id
+			&params.cookie.auth_id
 			].join("\n"));
 
 		let sha_hash = hasher.result_str();
@@ -116,21 +116,23 @@ impl OFClient {
 		.map(|x| hash_ascii[x] as i32)
 		.sum::<i32>() + dynamic_rules.checksum_constant;
 	
-		let prefix = &dynamic_rules.format[..dynamic_rules.format.find(':').unwrap()];
-		let suffix = &dynamic_rules.format[dynamic_rules.format.rfind(':').unwrap() + 1..];
-
 		let mut headers = header::HeaderMap::new();
-		headers.insert("sign", HeaderValue::from_str(
-			&format!("{}:{}:{:x}:{}",
-				prefix,
-				sha_hash,
-				checksum.abs(),
-				suffix
-			)
-		).unwrap());
+		headers.insert(header::ACCEPT, HeaderValue::from_static("application/json, text/plain, */*"));
+		headers.insert(header::USER_AGENT, HeaderValue::from_str(&params.user_agent).unwrap());
+		headers.insert("x-bc", HeaderValue::from_str(&params.x_bc).unwrap());
+		headers.insert("user-id", HeaderValue::from_str(&params.cookie.auth_id).unwrap());
 		
 		headers.insert("time", HeaderValue::from_str(&time).unwrap());
 		headers.insert("app-token", HeaderValue::from_str(&dynamic_rules.app_token).unwrap());
+		headers.insert("sign", HeaderValue::from_str(
+			&format!("{}:{}:{:x}:{}",
+				dynamic_rules.prefix,
+				sha_hash,
+				checksum.abs(),
+				dynamic_rules.suffix
+			)
+		).unwrap());
+		
 
 		Ok(headers)
 	}

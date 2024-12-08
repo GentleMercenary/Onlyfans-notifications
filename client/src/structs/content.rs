@@ -32,6 +32,7 @@ impl fmt::Display for ContentType {
 #[serde(rename_all = "camelCase")]
 pub struct Post {
 	pub id: u64,
+	#[serde(default)]
 	pub text: String,
 	pub price: Option<f32>,
 	pub author: User,
