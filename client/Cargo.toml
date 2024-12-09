@@ -12,6 +12,6 @@ futures-util = "0.3.21"
 serde = { version = "1.0.140", features = ["derive"] }
 rust-crypto = "0.2.36"
 cached = { version = "0.51.4", features = ["async"] }
-chrono = "0.4.19"
+chrono = { version = "0.4.19", features = ["serde"] }
 reqwest = { version = "0.12.5", features = ["cookies", "gzip", "json", "stream"] }
 httpdate = "1.0.3"

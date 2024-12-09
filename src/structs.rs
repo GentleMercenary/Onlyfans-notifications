@@ -1,10 +1,10 @@
 #![allow(dead_code)]
 
-use crate::deserializers::{notification_message, from_string, from_string_vec, de_str_to_date_opt};
+use crate::deserializers::{notification_message, from_str, from_str_vec};
 
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
-use of_client::{content, user::User, deserializers::de_str_to_date};
+use of_client::{content, user::User};
 
 #[derive(Serialize, Debug)]
 pub struct Connect<'a> {
@@ -36,9 +36,9 @@ pub struct Connected {
 
 #[derive(Deserialize, Debug)]
 pub struct PostPublished {
-	#[serde(deserialize_with = "from_string")]
+	#[serde(deserialize_with = "from_str")]
 	pub id: u64,
-	#[serde(deserialize_with="from_string")]
+	#[serde(deserialize_with="from_str")]
 	user_id: u64,
 }
 
@@ -47,7 +47,7 @@ pub struct PostPublished {
 struct Fundraising {
 	target: f32,
 	target_progress: f32,
-	#[serde(deserialize_with="from_string_vec")]
+	#[serde(deserialize_with="from_str_vec")]
 	presets: Vec<f32>
 }
 	
@@ -120,7 +120,7 @@ pub struct Stream {
 
 #[derive(Deserialize, Debug)]
 pub struct StreamStart {
-	#[serde(deserialize_with = "from_string")]
+	#[serde(deserialize_with = "from_str")]
 	stream_id: u64,
 	#[serde(rename = "userId")]
 	user_id: u64
@@ -128,9 +128,9 @@ pub struct StreamStart {
 
 #[derive(Deserialize, Debug)]
 pub struct StreamStop {
-	#[serde(deserialize_with = "from_string")]
+	#[serde(deserialize_with = "from_str")]
 	stream_id: u64,
-	#[serde(deserialize_with = "from_string")]
+	#[serde(deserialize_with = "from_str")]
 	stream_user_id: u64
 }
 
@@ -141,9 +141,7 @@ pub struct StreamUpdate {
 	raw_description: String,
 	is_active: bool,
 	is_finished: bool,
-	#[serde(deserialize_with = "de_str_to_date")]
 	started_at: DateTime<Utc>,
-	#[serde(deserialize_with = "de_str_to_date_opt")]
 	finished_at: Option<DateTime<Utc>>,
 	room: String,
 	likes_count: u32,
@@ -154,7 +152,6 @@ pub struct StreamUpdate {
 	can_join: bool,
 	partners: Vec<u64>,
 	is_scheduled: bool,
-	#[serde(deserialize_with = "de_str_to_date_opt")]
 	scheduled_at: Option<DateTime<Utc>>,
 	duration: u64,
 	tips_goal: String,
@@ -162,7 +159,7 @@ pub struct StreamUpdate {
 
 #[derive(Deserialize, Debug)]
 pub struct StreamLook {
-	#[serde(deserialize_with = "from_string")]
+	#[serde(deserialize_with = "from_str")]
 	stream_user_id: u64,
 	user: User,
 	total: u32,
@@ -179,7 +176,7 @@ pub struct StreamComment {
 
 #[derive(Deserialize, Debug)]
 pub struct StreamLike {
-	#[serde(deserialize_with = "from_string")]
+	#[serde(deserialize_with = "from_str")]
 	stream_user_id: u64
 }
 
@@ -187,9 +184,9 @@ pub struct StreamLike {
 #[serde(rename_all = "snake_case")]
 pub enum TaggedMessage {
 	PostPublished(PostPublished),
-	#[serde(deserialize_with = "from_string")]
+	#[serde(deserialize_with = "from_str")]
 	PostUpdated(u64),
-	#[serde(deserialize_with = "from_string")]
+	#[serde(deserialize_with = "from_str")]
 	PostExpire(u64),
 	PostFundraisingUpdated(PostFundraisingUpdated),
 

@@ -1,7 +1,5 @@
 #![allow(dead_code)]
 
-use crate::deserializers::de_str_to_date;
-
 use serde::Deserialize;
 use chrono::{DateTime, Utc};
 
@@ -33,9 +31,7 @@ pub struct Feed {
 	media_type: MediaType,
 	files: Files,
 	can_view: bool,
-	#[serde(default = "Utc::now")]
-	#[serde(deserialize_with = "de_str_to_date")]
-	created_at: DateTime<Utc>,
+	created_at: Option<DateTime<Utc>>,
 }
 
 // TODO: actually make use of this
@@ -56,7 +52,7 @@ impl Media for Feed {
 	fn source(&self) -> Option<&str> { self.files.full.url.as_deref() }
 	fn thumbnail(&self) -> Option<&str> { self.files.preview.as_ref().and_then(|preview: &File| preview.url.as_deref()) }
 	fn media_type(&self) -> &MediaType { &self.media_type }
-	fn unix_time(&self) -> i64 { self.created_at.timestamp() }
+	fn unix_time(&self) -> i64 { self.created_at.unwrap_or_else(Utc::now).timestamp() }
 }
 
 impl Media for Stream {

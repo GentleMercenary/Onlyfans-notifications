@@ -1,4 +1,4 @@
-use crate::deserializers::{parse_cookie, non_empty_string};
+use crate::deserializers::non_empty_string;
 
 use httpdate::fmt_http_date;
 use serde::{Deserialize, Serialize};
@@ -32,7 +32,6 @@ impl From<&Cookie> for Jar {
 
 #[derive(Deserialize, Debug)]
 pub struct AuthParams {
-	#[serde(deserialize_with = "parse_cookie")]
 	cookie: Cookie,
 	#[serde(deserialize_with = "non_empty_string")]
 	x_bc: String,

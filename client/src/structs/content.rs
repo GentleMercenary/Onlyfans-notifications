@@ -1,6 +1,6 @@
 #![allow(dead_code)]
 
-use crate::{deserializers::de_str_to_date, client::OFClient, media, user::User};
+use crate::{client::OFClient, media, user::User};
 
 use std::{slice, fmt};
 use futures_util::TryFutureExt;
@@ -39,7 +39,6 @@ pub struct Post {
 	#[serde(default)]
 	can_toggle_favorite: bool,
 	#[serde(default = "Utc::now")]
-	#[serde(deserialize_with = "de_str_to_date")]
 	posted_at: DateTime<Utc>,
 	#[serde(default)]
 	media: Vec<media::Feed>,
@@ -52,7 +51,6 @@ pub struct Chat {
 	pub text: String,
 	pub price: Option<f32>,
 	#[serde(default = "Utc::now")]
-	#[serde(deserialize_with = "de_str_to_date")]
 	created_at: DateTime<Utc>,
 	#[serde(default)]
 	media: Vec<media::Feed>,
@@ -65,7 +63,6 @@ pub struct Story {
 	#[serde(default)]
 	can_like: bool,
 	#[serde(default = "Utc::now")]
-	#[serde(deserialize_with = "de_str_to_date")]
 	created_at: DateTime<Utc>,
 	#[serde(default)]
 	media: Vec<media::Feed>,
@@ -85,7 +82,6 @@ pub struct Stream {
 	pub description: String,
 	room: String,
 	#[serde(default = "Utc::now")]
-	#[serde(deserialize_with = "de_str_to_date")]
 	started_at: DateTime<Utc>,
 	#[serde(flatten)]
 	media: media::Stream,

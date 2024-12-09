@@ -1,7 +1,6 @@
 use std::collections::HashSet;
 use log::LevelFilter;
 use of_client::content::ContentType;
-use crate::deserializers::de_log_level;
 use serde::Deserialize;
 
 const fn default_log_level() -> LevelFilter {
@@ -40,7 +39,6 @@ pub struct Settings {
 	pub like: Selection,
 	pub reconnect: bool,
 	#[serde(default = "default_log_level")]
-	#[serde(deserialize_with="de_log_level")]
 	pub log_level: LevelFilter
 }
 
