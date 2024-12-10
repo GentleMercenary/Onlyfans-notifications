@@ -1,42 +1,17 @@
-use crate::deserializers::non_empty_string;
-
 use httpdate::fmt_http_date;
+use reqwest_cookie_store::{CookieStore, CookieStoreRwLock};
 use serde::{Deserialize, Serialize};
 use cached::proc_macro::once;
 use futures::TryFutureExt;
 use crypto::{digest::Digest, sha1::Sha1};
-use reqwest::{cookie::Jar, header::{self, HeaderValue}, Client, Response, Url, Method, RequestBuilder, IntoUrl};
-use std::{collections::HashMap, sync::{Arc, RwLock}, time::{SystemTime, UNIX_EPOCH}};
+use reqwest::{header::{self, HeaderValue}, Client, IntoUrl, Method, RequestBuilder, Response, Url};
+use std::{borrow::Cow, sync::Arc, time::{SystemTime, UNIX_EPOCH}};
 
-#[derive(Debug)]
-pub struct Cookie {
-	pub sess: String,
-	pub auth_id: String,
-	pub other: HashMap<String, String>,
-}
-
-impl From<&Cookie> for Jar {
-	fn from(value: &Cookie) -> Self {
-		let cookie_jar = Jar::default();
-		let url: Url = "https://onlyfans.com".parse().unwrap();
-
-		cookie_jar.add_cookie_str(&format!("sess={}", &value.sess), &url);
-		cookie_jar.add_cookie_str(&format!("auth_id={}", &value.auth_id), &url);
-		for (k, v) in &value.other {
-			cookie_jar.add_cookie_str(&format!("{}={}", &k, &v), &url);
-		}
-
-		cookie_jar
-	}
-}
-
-#[derive(Deserialize, Debug)]
 pub struct AuthParams {
-	cookie: Cookie,
-	#[serde(deserialize_with = "non_empty_string")]
-	x_bc: String,
-	#[serde(deserialize_with = "non_empty_string")]
-	user_agent: String,
+	pub cookie: CookieStore,
+	pub user_id: String,
+	pub x_bc: String,
+	pub user_agent: String,
 }
 
 #[derive(Deserialize, Debug, Clone)]
@@ -49,7 +24,7 @@ struct DynamicRules {
 	checksum_indexes: Vec<usize>,
 }
 
-#[once(time = 3600, result = true)]
+#[once(time = 3600, result = true, sync_writes = true)]
 async fn get_dynamic_rules() -> reqwest::Result<DynamicRules> {
 	reqwest::get("https://raw.githubusercontent.com/deviint/onlyfans-dynamic-rules/main/dynamicRules.json")
 	.inspect_err(|err| error!("Error getting dynamic rules: {err:?}"))
@@ -59,37 +34,65 @@ async fn get_dynamic_rules() -> reqwest::Result<DynamicRules> {
 }
 
 #[derive(Debug, Clone)]
+struct RequestHeaders {
+	pub cookie: Arc<CookieStoreRwLock>,
+	pub user_id: String,
+	pub x_bc: String,
+	pub user_agent: String,
+}
+
+impl From<AuthParams> for RequestHeaders {
+	fn from(value: AuthParams) -> Self {
+		Self {
+			cookie: Arc::new(CookieStoreRwLock::new(value.cookie)),
+			user_id: value.user_id,
+			user_agent: value.user_agent,
+			x_bc: value.x_bc
+		}
+	}
+}
+
+impl RequestHeaders {
+	fn set(&mut self, value: AuthParams) {
+		self.user_agent = value.user_agent;
+		self.user_id = value.user_id;
+		self.x_bc = value.x_bc;
+
+		*self.cookie.write().unwrap() = value.cookie;
+	}
+}
+
+#[derive(Debug, Clone)]
 pub struct OFClient {
-	client: Client, params: Arc<RwLock<AuthParams>>,
+	client: Client, headers: RequestHeaders,
 }
 
 impl OFClient {
 	pub fn new(params: AuthParams) -> reqwest::Result<Self> {
-		let cookie_jar = Jar::from(&params.cookie);
+		let headers: RequestHeaders = params.into();
 
 		let client = reqwest::Client::builder()
-		.cookie_store(true)
-		.cookie_provider(Arc::new(cookie_jar))
+		.cookie_provider(headers.cookie.clone())
 		.gzip(true)
 		.build()?;
 
-		Ok(OFClient { client, params: Arc::new(RwLock::new(params)) })
+		Ok(OFClient { client, headers })
 	}
 
 	pub fn set_auth_params(&mut self, params: AuthParams) {
-		let mut self_params = self.params.write().unwrap();
-		*self_params = params;
+		self.headers.set(params);
 	}
 
-	pub async fn make_headers<U: IntoUrl>(&self, link: U) -> reqwest::Result<header::HeaderMap> {
+	async fn make_headers<U: IntoUrl>(&self, link: U) -> reqwest::Result<header::HeaderMap> {
 		let dynamic_rules = get_dynamic_rules().await?;
-		let params = self.params.read().unwrap();
 
 		let url: Url = link.into_url()?;
-		let mut url_param = url.path().to_string();
+		let mut url_param: Cow<'_, str> = Cow::Borrowed(url.path());
 		if let Some(query) = url.query() {
-			url_param.push('?');
-			url_param.push_str(query);
+			let mut s = url_param.into_owned();
+			s.push('?');
+			s.push_str(query);
+			url_param = Cow::Owned(s);
 		}
 		
 		let time = SystemTime::now()
@@ -99,12 +102,14 @@ impl OFClient {
 			.to_string();
 		
 		let mut hasher = Sha1::new();
-		hasher.input_str(&[
-			dynamic_rules.static_param.as_str(),
-			&time,
-			&url_param,
-			&params.cookie.auth_id
-			].join("\n"));
+		hasher.input_str(
+			&[
+				&dynamic_rules.static_param,
+				&time,
+				&*url_param,
+				&self.headers.user_id
+			].join("\n")
+		);
 
 		let sha_hash = hasher.result_str();
 		let hash_ascii = sha_hash.as_bytes();
@@ -117,10 +122,9 @@ impl OFClient {
 	
 		let mut headers = header::HeaderMap::new();
 		headers.insert(header::ACCEPT, HeaderValue::from_static("application/json, text/plain, */*"));
-		headers.insert(header::USER_AGENT, HeaderValue::from_str(&params.user_agent).unwrap());
-		headers.insert("x-bc", HeaderValue::from_str(&params.x_bc).unwrap());
-		headers.insert("user-id", HeaderValue::from_str(&params.cookie.auth_id).unwrap());
-		
+		headers.insert(header::USER_AGENT, HeaderValue::from_str(&self.headers.user_agent).unwrap());
+		headers.insert("x-bc", HeaderValue::from_str(&self.headers.x_bc).unwrap());
+		headers.insert("user-id", HeaderValue::from_str(&self.headers.user_id).unwrap());
 		headers.insert("time", HeaderValue::from_str(&time).unwrap());
 		headers.insert("app-token", HeaderValue::from_str(&dynamic_rules.app_token).unwrap());
 		headers.insert("sign", HeaderValue::from_str(
@@ -181,12 +185,10 @@ impl OFClient {
 }
 
 async fn error_for_status_log(response: Response) -> reqwest::Result<Response> {
-	let result = response.error_for_status_ref();
-	match result {
+	match response.error_for_status_ref() {
 		Ok(_) => Ok(response),
 		Err(err) => {
-			let url = response.url().clone();
-			error!("url: {}, status {}, request body: {}", url, response.status(), response.text().await?);
+			error!("url: {:?}, status {}, request body: {}", err.url(), response.status(), response.text().await?);
 			Err(err)
 		},
 	}
