@@ -2,10 +2,10 @@
 
 use std::{fs::{self, File}, io::{BufWriter, Write}, path::{Path, PathBuf}, sync::{Mutex, OnceLock}};
 
-use anyhow::{anyhow, Context, Ok};
+use anyhow::{anyhow, Context};
 use filetime::{set_file_mtime, FileTime};
 use futures_util::StreamExt;
-use of_client::{client::OFClient, content, httpdate::parse_http_date, media::{Media, MediaType}, reqwest::{header, IntoUrl, StatusCode, Url}, user::User};
+use of_client::{OFClient, content, httpdate::parse_http_date, media::{Media, MediaType}, reqwest::{header, IntoUrl, StatusCode, Url}, user::User};
 use tempdir::TempDir;
 use winrt_toast::{register, Toast, ToastManager};
 
@@ -50,7 +50,8 @@ pub async fn get_thumbnail<T: content::HasMedia>(content: &T, client: &OFClient)
 	match thumb {
 		Some(thumb) => {
 			static TEMPDIR: OnceLock<TempDir> = OnceLock::new();
-			let temp_dir = TEMPDIR.get_or_init(|| TempDir::new("OF_thumbs").expect("Creating temporary directory"));
+			let temp_dir = TEMPDIR.get_or_init(|| TempDir::new("OF_thumbs")
+				.expect("Creating temporary directory"));
 			let (_, path) = fetch_file(client, thumb, temp_dir.path(), None).await?;
 			Ok(Some(path))
 		},
@@ -70,17 +71,18 @@ pub async fn fetch_file<U: IntoUrl>(client: &OFClient, link: U, path: &Path, fil
 		})
 		.ok_or_else(|| anyhow!("Filename unknown"))?;
 
-	let (filename, extension) = filename.rsplit_once('.').unwrap_or((filename, "temp"));
-	let final_path = path.join(filename).with_extension(extension);
+	let final_path = path.join(filename);
 	if !final_path.exists() { fs::create_dir_all(path)?; }
 
-	let file_modify_date = final_path.metadata().and_then(|metadata| metadata.modified()).ok();
+	let file_modify_date = final_path.metadata().and_then(|metadata| metadata.modified());
 
 	let response = {
-		if let Some(date) = file_modify_date {
+		if let Ok(date) = file_modify_date {
 			let resp = client.get_if_modified_since(url, date).await?;
-			if resp.status() == StatusCode::NOT_MODIFIED { return Ok((true, final_path)) }
-			else { resp }
+			match resp.status() {
+				StatusCode::NOT_MODIFIED => return Ok((true, final_path)),
+				_ => resp
+			}
 		} else { client.get(url).await? }
 	};
 
@@ -89,20 +91,22 @@ pub async fn fetch_file<U: IntoUrl>(client: &OFClient, link: U, path: &Path, fil
 	let temp_path = final_path.with_extension("temp");
 	let mut writer = File::create(&temp_path)
 		.map(BufWriter::new)
-		.context(format!("Created file at {:?}", temp_path))?;
+		.context(format!("Creating file at {:?}", temp_path))?;
 
 	let mut stream = response.bytes_stream();
 	while let Some(item) = stream.next().await {
-		let chunk = item.context("Error while downloading file")?;
-		writer.write_all(&chunk).context("Error writing file")?;
+		let chunk = item.context("Downloading file chunk")?;
+		writer.write_all(&chunk).context("Writing file chunk")?;
 	}
 	writer.flush()?;
 
-	fs::rename(&temp_path, &final_path).context(format!("Renamed {:?} to {:?}", temp_path.file_name(), final_path.file_name()))?;
+	fs::rename(&temp_path, &final_path)
+	.context(format!("Renaming {:?} to {:?}", temp_path.file_name(), final_path.file_name()))?;
 
 	if let Some(modified) = last_modified_header {
 		if let Some(date) = modified.to_str().ok().and_then(|s| parse_http_date(s).ok()) {
-			set_file_mtime(&final_path, FileTime::from_system_time(date)).context("Error setting file modified date")?;
+			set_file_mtime(&final_path, FileTime::from_system_time(date))
+			.context("Setting file modified date")?;
 		}
 	}
 

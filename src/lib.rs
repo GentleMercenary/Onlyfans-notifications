@@ -1,21 +1,17 @@
 #![feature(let_chains)]
 
-pub mod socket;
-pub mod deserializers;
 pub mod helpers;
 pub mod handlers;
 pub mod settings;
-pub mod structs;
 
 #[macro_use]
 extern crate log;
 
-use crate::deserializers::non_empty_str;
 use std::{fs, io};
 use cookie::{Cookie, ParseError};
-use of_client::{client::AuthParams, reqwest_cookie_store::CookieStore};
+use of_client::{AuthParams, reqwest_cookie_store::CookieStore};
 use reqwest::Url;
-use serde::Deserialize;
+use serde::{Deserialize, Deserializer, de::Error};
 use thiserror::Error;
 
 #[derive(Error, Debug)]
@@ -36,6 +32,16 @@ pub enum AuthParseError {
 	CookieParse(#[from] ParseError),
 	#[error("Cookie is missing '{0}' field")]
 	IncompleteCookie(String)
+}
+
+fn non_empty_str<'de, D>(deserializer: D) -> Result<&'de str, D::Error>
+where
+	D: Deserializer<'de>,
+{
+	let s: &str = Deserialize::deserialize(deserializer)?;
+	(!s.is_empty())
+	.then_some(s)
+	.ok_or_else(|| D::Error::custom("Empty string"))
 }
 
 pub fn get_auth_params() -> Result<AuthParams, AuthParseError> {

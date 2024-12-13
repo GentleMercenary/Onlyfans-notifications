@@ -5,33 +5,47 @@ edition = "2021"
 
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 
-[dependencies]
+[workspace]
+members = [
+	"client",
+	"daemon",
+]
 
+[workspace.dependencies]
+log = "0.4.17"
 thiserror = "2.0.4"
+futures = "0.3.21"
+futures-util = "0.3.21"
+serde_json = "1.0.82"
+tokio = "1.29.0"
+serde = { version = "1.0.140", features = ["derive"] }
+reqwest = "0.12.5"
+chrono = "0.4.19"
+
+[dependencies]
+thiserror = { workspace = true }
 anyhow = "1.0.66"
 
-log = { version = "0.4.17", features = ["serde"] }
+log = { workspace = true, features = ["serde"] }
 simplelog = "0.12.0"
 
 winit = "0.30.5"
 tray-icon = "0.19.2"
 winrt-toast = "0.1.1"
-tokio = { version = "1.29.0", features = ["rt-multi-thread", "macros", "sync", "time"] }
-tokio-tungstenite = { version = "0.24.0", features = ["native-tls"] }
-reqwest = { version = "0.12.5", features = ["stream"] }
-futures = "0.3.21"
-futures-util = "0.3.21"
 
+tokio = { workspace = true, features = ["rt-multi-thread", "macros"] }
+reqwest = { workspace = true, features = ["stream"] }
+futures-util = { workspace = true }
+futures = { workspace = true }
+
+serde_json = { workspace = true }
+serde = { workspace = true }
 nanohtml2text = "0.2.1"
-serde_json = "1.0.82"
-serde = { version = "1.0.140", features = ["derive"] }
+cookie = "0.18.1"
 
-rand = "0.8.5"
-rand_distr = "0.4.3"
-
-chrono = { version = "0.4.19", features = ["serde"] }
+chrono = { workspace = true }
 tempdir = "0.3.7"
 filetime = "0.2.17"
-of-client = { version = "0.1.0", path = "client" }
 
-cookie = "0.18.1"
+of-client = { path = "client" }
+of-socket = { path = "daemon" }

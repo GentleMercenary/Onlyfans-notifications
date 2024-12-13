@@ -1,7 +1,8 @@
 mod init;
 
-use of_notifier::{get_auth_params, settings::{Settings, Selection, CoarseSelection}, structs::{Message, TaggedMessage}, handlers::handle_message};
-use of_client::client::OFClient;
+use of_notifier::{get_auth_params, settings::{Settings, Selection, CoarseSelection}, handlers::handle_message};
+use of_socket::structs::{Message, TaggedMessage};
+use of_client::OFClient;
 use std::thread::sleep;
 use std::time::Duration;
 use std::sync::Once;

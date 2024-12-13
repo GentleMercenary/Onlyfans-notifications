@@ -1,7 +1,7 @@
 mod init;
 
 use of_notifier::get_auth_params;
-use of_client::client::OFClient;
+use of_client::OFClient;
 use init::init_log;
 
 #[tokio::test]

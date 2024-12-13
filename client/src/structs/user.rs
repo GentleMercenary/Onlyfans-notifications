@@ -1,5 +1,4 @@
-use crate::client::OFClient;
-
+use crate::OFClient;
 use std::fmt;
 use serde::Deserialize;
 use futures_util::TryFutureExt;

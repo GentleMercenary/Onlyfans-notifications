@@ -1,11 +1,12 @@
-use crate::{helpers::{fetch_file, get_avatar, get_thumbnail, show_notification}, settings::Settings, structs::{Message, TaggedMessage}};
+use crate::{helpers::{fetch_file, get_avatar, get_thumbnail, show_notification}, settings::Settings};
 
 use std::path::Path;
 use anyhow::bail;
 use tokio::sync::RwLock;
-use futures::{future::{join_all, try_join, BoxFuture}, FutureExt};
+use futures::{future::{join_all, try_join}, FutureExt};
 use nanohtml2text::html2text;
-use of_client::{client::OFClient, content::{self, ContentType}, media::{Media, MediaType}, user::User};
+use of_socket::structs::{Message, TaggedMessage};
+use of_client::{OFClient, content::{self, ContentType}, media::{Media, MediaType}, user::User};
 use winrt_toast::{content::{image::{ImageHintCrop, ImagePlacement}, text::TextPlacement}, Header, Image, Text, Toast};
 
 pub async fn handle_message(message: Message, client: &OFClient, settings: &RwLock<Settings>) -> anyhow::Result<()> {
@@ -29,15 +30,14 @@ pub async fn handle_message(message: Message, client: &OFClient, settings: &RwLo
 					info!("Stream message received: {:?}", msg);
 					
 					let settings = settings.read().await;
-					let futs: Vec<BoxFuture<'_, ()>> = vec![
+					let futs = [
 						settings.notify.enabled_for(&msg.user.name, ContentType::Streams)
 							.then(|| notify_with_thumbnail(&msg.content, &msg.user, client).map(|_| ()).boxed()),
 						settings.download.enabled_for(&msg.user.username, ContentType::Streams)
 							.then(|| download(&msg.content, &msg.user, client).boxed())
 					]
 					.into_iter()
-					.flatten()
-					.collect();
+					.flatten();
 
 					drop(settings);
 					let _ = join_all(futs).await;
@@ -47,7 +47,7 @@ pub async fn handle_message(message: Message, client: &OFClient, settings: &RwLo
 					let content = client.get_post(msg.id).await?;
 
 					let settings = settings.read().await;
-					let futs: Vec<BoxFuture<'_, ()>> = vec![
+					let futs = [
 						settings.notify.enabled_for(&content.author.username, ContentType::Posts)
 							.then(|| notify_with_thumbnail(&content, &content.author, client).map(|_| ()).boxed()),
 						settings.download.enabled_for(&content.author.username, ContentType::Posts)
@@ -56,8 +56,7 @@ pub async fn handle_message(message: Message, client: &OFClient, settings: &RwLo
 							.then(|| like(&content, client).boxed())
 					]
 					.into_iter()
-					.flatten()
-					.collect();
+					.flatten();
 					
 					drop(settings);
 					let _ = join_all(futs).await;
@@ -66,7 +65,7 @@ pub async fn handle_message(message: Message, client: &OFClient, settings: &RwLo
 					info!("Chat message received: {:?}", msg);
 
 					let settings = settings.read().await;
-					let futs: Vec<BoxFuture<'_, ()>> = vec![
+					let futs = [
 						settings.notify.enabled_for(&msg.from_user.username, ContentType::Chats)
 							.then(|| notify_with_thumbnail(&msg.content, &msg.from_user, client).map(|_| ()).boxed()),
 						settings.download.enabled_for(&msg.from_user.username, ContentType::Chats)
@@ -75,8 +74,7 @@ pub async fn handle_message(message: Message, client: &OFClient, settings: &RwLo
 							.then(|| like(&msg.content, client).boxed())
 					]
 					.into_iter()
-					.flatten()
-					.collect();
+					.flatten();
 
 					drop(settings);
 					let _ = join_all(futs).await;
@@ -87,7 +85,7 @@ pub async fn handle_message(message: Message, client: &OFClient, settings: &RwLo
 					let _ = join_all(msg.iter().map(|story| async move {
 						if let Ok(user) = client.get_user(story.user_id).await {
 							let settings = settings.read().await;
-							let futs: Vec<BoxFuture<'_, ()>> = vec![
+							let futs = [
 								settings.notify.enabled_for(&user.username, ContentType::Stories)
 									.then(|| notify_with_thumbnail(&story.content, &user, client).map(|_| ()).boxed()),
 								settings.download.enabled_for(&user.username, ContentType::Stories)
@@ -96,8 +94,7 @@ pub async fn handle_message(message: Message, client: &OFClient, settings: &RwLo
 									.then(|| like(&story.content, client).boxed())
 							]
 							.into_iter()
-							.flatten()
-							.collect();
+							.flatten();
 	
 							drop(settings);
 							let _ = join_all(futs).await;

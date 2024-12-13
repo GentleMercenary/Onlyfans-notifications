@@ -1,11 +1,10 @@
 #![allow(dead_code)]
 
-use anyhow::bail;
-use thiserror::Error;
 use crate::structs;
+use thiserror::Error;
 use std::{sync::{Arc, LazyLock}, time::Duration};
 use futures::stream::SplitStream;
-use tokio::{net::TcpStream, sync::{mpsc::{self, UnboundedReceiver}, Notify}, time::{sleep_until, timeout, Instant}};
+use tokio::{net::TcpStream, sync::Notify, time::{sleep_until, timeout, Instant}};
 use futures_util::{SinkExt, StreamExt};
 use tokio_tungstenite::{connect_async, tungstenite::{self, Message}, MaybeTlsStream, WebSocketStream};
 
@@ -15,6 +14,8 @@ pub enum SocketError {
 	SocketError(#[from] tungstenite::Error),
 	#[error("Timeout expired")]
 	TimeoutExpired,
+	#[error("Unexpected message")]
+	UnexpectedMessage
 }
 
 pub type SocketResponse = Result<structs::Message, SocketError>;
@@ -41,25 +42,33 @@ impl TryFrom<Message> for structs::Message {
 	}
 }
 
-static HEARTBEAT: LazyLock<Vec<u8>> = LazyLock::new(|| {
-	serde_json::to_vec(&structs::Heartbeat { act: "get_onlines", ids: &[] }).unwrap()
+static HEARTBEAT: LazyLock<Message> = LazyLock::new(|| {
+	Message::from(
+		serde_json::to_vec(
+			&structs::Heartbeat { act: "get_onlines", ids: &[] }
+		).unwrap()
+	)
 });
 
 pub struct Disconnected;
-#[derive(Debug)]
 pub struct Connected {
 	heartbeat_handle: tokio::task::JoinHandle<()>,
 	message_handle: tokio::task::JoinHandle<()>,
 }
 
-#[derive(Debug)]
 pub struct WebSocketClient<State = Disconnected> {
+	response_callback: Option<Arc<dyn Fn(SocketResponse) + Sync + Send + 'static>>,
 	state: State,
 }
 
 impl WebSocketClient {
 	pub const fn new() -> Self {
-		Self { state: Disconnected }
+		Self { state: Disconnected, response_callback: None }
+	}
+
+	pub fn on_response(mut self, f: impl Fn(SocketResponse) + Sync + Send + 'static) -> Self {
+		self.response_callback = Some(Arc::new(f));
+		self
 	}
 }
 
@@ -70,7 +79,7 @@ impl Default for WebSocketClient {
 }
 
 impl WebSocketClient<Disconnected> {
-	pub async fn connect(self, url: &str, token: &str) -> anyhow::Result<(WebSocketClient<Connected>, UnboundedReceiver<SocketResponse>)> {
+	pub async fn connect(self, url: &str, token: &str) -> Result<WebSocketClient<Connected>, SocketError> {
 		info!("Creating websocket");
 		let (socket, _) = connect_async(url).await?;
 		info!("Websocket created");
@@ -80,7 +89,7 @@ impl WebSocketClient<Disconnected> {
 		info!("Sending connect message");
 		
 		sink
-		.send(serde_json::to_vec(&structs::Connect { act: "connect", token })?.into())
+		.send(serde_json::to_vec(&structs::Connect { act: "connect", token }).unwrap().into())
 		.await?;
 	
 
@@ -91,31 +100,32 @@ impl WebSocketClient<Disconnected> {
 			}
 			Err(_) => Err(SocketError::TimeoutExpired),
 			Ok(Err(e)) => Err(e.into()),
-			Ok(Ok(v)) => {
-				bail!("Invalid response to connect message: {v:?}")
-			}
+			Ok(Ok(_)) => Err(SocketError::UnexpectedMessage)
 		}?;
 
-		let (message_tx, message_rx) = mpsc::unbounded_channel::<SocketResponse>();
 		let heartbeat_notify = Arc::new(Notify::new());
 		
 		let heartbeat_handle = {
-			let message_tx = message_tx.clone();
 			let heartbeat_notify = heartbeat_notify.clone();
+			let callback = self.response_callback.clone();
 			tokio::spawn(async move {
 				loop {
 					let last_send_time = Instant::now();
 					trace!("Sending heartbeat: {HEARTBEAT:?}");
-					if let Err(e) = sink.send(HEARTBEAT.as_slice().into()).await {
+					if let Err(e) = sink.send(HEARTBEAT.clone()).await {
 						error!("{e:?}");
-						let _ = message_tx.send(Err(e.into()));
+						if let Some(callback) = callback { callback(Err(e.into())); };
 						break;
 					}
-	
+					
 					match timeout(Duration::from_secs(5), heartbeat_notify.notified()).await {
 						Ok(_) => trace!("Heartbeat acknowledged"),
 						Err(_) => {
-							let _ = message_tx.send(Err(SocketError::TimeoutExpired));
+							if let Some(callback) = callback {
+								let e = SocketError::TimeoutExpired;
+								error!("{e:?}");
+								callback(Err(e));
+							};
 							break;
 						}
 					}
@@ -126,16 +136,17 @@ impl WebSocketClient<Disconnected> {
 		};
 
 		let message_handle = {
+			let callback = self.response_callback.clone();
 			tokio::spawn(async move {
 				loop {
 					match wait_for_message(&mut stream).await {
 						Ok(Some(msg)) => {
 							if let structs::Message::Onlines(_) = msg { heartbeat_notify.notify_one(); }
-							else { let _ = message_tx.send(Ok(msg)); }
+							else if let Some(ref callback) = callback { callback(Ok(msg)); }
 						},
 						Err(e) => { 
 							error!("{e:?}");
-							let _ = message_tx.send(Err(e.into()));
+							if let Some(callback) = callback { callback(Err(e.into())); };
 							break;
 						}
 						Ok(None) => (),
@@ -144,19 +155,20 @@ impl WebSocketClient<Disconnected> {
 			})
 		};
 
-		Ok((WebSocketClient { 
+		Ok(WebSocketClient {
 			state: Connected {
 				heartbeat_handle,
 				message_handle
-			}
-		}, message_rx))
+			},
+			response_callback: self.response_callback
+		})
 	}
 }
 
 impl WebSocketClient<Connected> {
 	pub fn close(self) -> WebSocketClient<Disconnected> {
 		drop(self.state);
-		WebSocketClient { state: Disconnected }
+		WebSocketClient { state: Disconnected, response_callback: self.response_callback }
 	}
 }
 

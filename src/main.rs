@@ -4,25 +4,21 @@
 extern crate log;
 extern crate simplelog;
 
-use of_notifier::{get_auth_params, handlers::handle_message, helpers::{init_client, show_notification}, settings::Settings, socket::{SocketError, WebSocketClient}, structs::Message, FileParseError};
-use rand::{rngs::StdRng, Rng, SeedableRng};
-use rand_distr::{Distribution, Exp1, Standard};
-use chrono::{Local, Utc};
-use futures_util::TryFutureExt;
-use of_client::{client::OFClient, user};
-use serde::Serialize;
+use of_notifier::{get_auth_params, handlers::handle_message, helpers::{init_client, show_notification}, settings::Settings, FileParseError};
+use chrono::Local;
+use of_socket::{socket::SocketError, structs::Message, DaemonError, ProtocolError, SocketDaemon, WSError};
+use of_client::OFClient;
 use tray_icon::{menu::{Menu, MenuEvent, MenuItem}, Icon, MouseButton, MouseButtonState, TrayIcon, TrayIconBuilder, TrayIconEvent};
 use winit::{application::ApplicationHandler, event_loop::{ControlFlow, EventLoop, EventLoopProxy}};
 use winrt_toast::{Toast, ToastDuration};
-use std::{fs::{self, File}, path::Path, sync::Arc, time::Duration};
-use tokio::{sync::RwLock, task::JoinHandle, time::sleep};
+use std::{fs::{self, File}, path::Path, sync::Arc};
+use tokio::{runtime::Handle, sync::RwLock, task};
 use simplelog::{ColorChoice, CombinedLogger, ConfigBuilder, TermLogger, TerminalMode, WriteLogger};
-use tokio_tungstenite::tungstenite::error::{Error as ws_error, ProtocolError as protocol_error};
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
 	let settings = get_settings()
-		.expect("Settings read properly");
+		.expect("Reading settings");
 
 	let log_path = Path::new("logs")
 		.join(Local::now().format("%Y%m%d_%H%M%S").to_string())
@@ -30,7 +26,7 @@ async fn main() -> anyhow::Result<()> {
 
 	log_path.parent()
 	.and_then(|dir| fs::create_dir_all(dir).ok())
-	.expect("Created log directory");
+	.expect("Creating log directory");
 	
 	let log_config = ConfigBuilder::default()
 		.add_filter_ignore_str("reqwest::connect")
@@ -50,16 +46,15 @@ async fn main() -> anyhow::Result<()> {
 	.unwrap();
 
 	event_loop.set_control_flow(ControlFlow::Wait);
+	let proxy = event_loop.create_proxy();
 
-	let connected_icon = tray_icon::Icon::from_path(
-		Path::new("icons").join("icon.ico"),
-		None
-	).expect("Failed to create connected icon (icon.ico)");
+	let connected_icon = tray_icon::Icon::from_path(Path::new("icons").join("icon.ico"), None)
+	.inspect_err(|e| error!("Failed to create connected icon: {e}"))
+	.unwrap();
 
-	let disconnected_icon = tray_icon::Icon::from_path(
-		Path::new("icons").join("icon2.ico"),
-		None
-	).expect("Failed to create disconnected icon (icon2.ico)");
+	let disconnected_icon = tray_icon::Icon::from_path(Path::new("icons").join("icon2.ico"), None)
+	.inspect_err(|e| error!("Failed to create disconnected icon: {e}"))
+	.unwrap();
 
 	let tray_menu = Menu::new();
 	let reload_settings_item = MenuItem::new("Reload settings", true, None);
@@ -71,10 +66,12 @@ async fn main() -> anyhow::Result<()> {
 		&quit_item,
 	])?;
 
-	let proxy = event_loop.create_proxy();
-	MenuEvent::set_event_handler(Some(move |event| {
-		proxy.send_event(Events::MenuEvent(event)).unwrap();
-	}));
+	{
+		let proxy = proxy.clone();
+		MenuEvent::set_event_handler(Some(move |event| {
+			proxy.send_event(Events::MenuEvent(event)).unwrap();
+		}));
+	}
 
 	let tray = TrayIconBuilder::new()
 	.with_tooltip("OF Notifier")
@@ -84,22 +81,33 @@ async fn main() -> anyhow::Result<()> {
 	.build()
 	.unwrap();
 
-	let proxy = event_loop.create_proxy();
-	TrayIconEvent::set_event_handler(Some(move |event| {
-		proxy.send_event(Events::TrayEvent(event)).unwrap();
-	}));
+	{
+		let proxy = proxy.clone();
+		TrayIconEvent::set_event_handler(Some(move |event| {
+			proxy.send_event(Events::TrayEvent(event)).unwrap();
+		}));
+	}
 
 	let client = init_client()?;
+	let daemon = SocketDaemon::new()
+		.on_disconnect({
+			let proxy = proxy.clone();
+			move |e| { proxy.send_event(Events::Disconnected(e)).unwrap(); }
+		})
+		.on_message({
+			let proxy = proxy.clone();
+			move |msg| { proxy.send_event(Events::MessageReceived(msg)).unwrap(); }
+		});
 
 	let mut app = App {
 		tray,
-		proxy: event_loop.create_proxy(),
+		proxy,
 		connected_icon,
 		disconnected_icon,
 		settings: Arc::new(RwLock::new(settings)),
 		state: AppState::Connecting,
 		client,
-		connection: None,
+		daemon,
 		menu_items: MenuItems {
 			quit: quit_item,
 			reload_settings: reload_settings_item,
@@ -111,57 +119,14 @@ async fn main() -> anyhow::Result<()> {
 	Ok(())
 }
 
-#[derive(Debug, Serialize)]
-enum Pages {
-	Collections,
-	Subscribes,
-	Profile,
-	Chats,
-}
-
-#[derive(Debug, Serialize)]
-#[serde(rename_all = "camelCase")]
-struct ClickStats {
-	page: Pages,
-	block: &'static str,
-	event_time: String
-}
-
-impl Distribution<ClickStats> for Standard {
-	fn sample<R: rand::Rng + ?Sized>(&self, rng: &mut R) -> ClickStats {
-		ClickStats {
-			page: match rng.gen_range(0..=3) {
-				0 => Pages::Collections,
-				1 => Pages::Subscribes,
-				2 => Pages::Profile,
-				_ => Pages::Chats
-			},
-			block: "Menu",
-			event_time: Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Millis, true)
-		}
-	}
-}
-
 #[derive(Debug)]
 enum Events {
 	Connected,
-	Disconnected(anyhow::Error),
+	Disconnected(DaemonError),
 	TrayEvent(TrayIconEvent),
 	MenuEvent(MenuEvent),
 	MessageReceived(Message),
 	Reconnect
-}
-
-macro_rules! propagate_proxy {
-	($proxy:expr, $expr:expr) => {
-		match $expr {
-			Ok(val) => val,
-			Err(e) => {
-				$proxy.send_event(Events::Disconnected(e.into())).unwrap();
-				return;
-			}
-		}
-	};
 }
 
 #[derive(PartialEq)]
@@ -173,18 +138,6 @@ struct MenuItems {
 	reload_auth: MenuItem,
 }
 
-struct Connection {
-	stream_handle: JoinHandle<()>,
-	activity_handle: JoinHandle<()>
-}
-
-impl Drop for Connection {
-	fn drop(&mut self) {
-		self.stream_handle.abort();
-		self.activity_handle.abort();
-	}
-}
-
 struct App {
 	tray: TrayIcon,
 	proxy: EventLoopProxy<Events>,
@@ -193,77 +146,26 @@ struct App {
 	settings: Arc<RwLock<Settings>>,
 	client: OFClient,
 	state: AppState,
-	connection: Option<Connection>,
+	daemon: SocketDaemon,
 	menu_items: MenuItems
 }
 
 impl App {
 	fn init_connection(&mut self) {
 		self.state = AppState::Connecting;
-		info!("Connecting");
-
-		let activity_handle = tokio::spawn({
+		task::block_in_place(|| {
 			let client = self.client.clone();
-			async move {
-				let rng = StdRng::from_entropy();
-				let mut intervals = rng.sample_iter(Exp1).map(|v: f32| Duration::from_secs_f32(v * 60.0));
-				
-				loop {
-					sleep(intervals.next().unwrap()).await;
-					let click = rand::random::<ClickStats>();
-					trace!("Simulating site activity: {}", serde_json::to_string(&click).unwrap());
-					let _ = client.post("https://onlyfans.com/api2/v2/users/clicks-stats", Some(&click)).await;
+			Handle::current().block_on(async move {
+				match self.daemon.start(client).await {
+					Ok(_) => self.proxy.send_event(Events::Connected).unwrap(),
+					Err(err) => self.proxy.send_event(Events::Disconnected(err)).unwrap()
 				}
-			}
-		});
-		
-		let stream_handle = tokio::spawn({
-			let client = self.client.clone();
-			let proxy = self.proxy.clone();
-			async move {
-				info!("Fetching user data");
-				let me = propagate_proxy!(proxy, 
-					client.get("https://onlyfans.com/api2/v2/users/me")
-					.and_then(|response| response.json::<user::Me>())
-					.await
-				);
-				
-				debug!("{me:?}");
-				info!("Connecting as {}", me.name);
-				let (_socket, mut stream) = propagate_proxy!(proxy,
-					WebSocketClient::new()
-					.connect(&me.ws_url, &me.ws_auth_token)
-					.inspect_err(|err| error!("Error connecting: {err}"))
-					.await
-				);
-			
-				proxy.send_event(Events::Connected).unwrap();
-
-				loop {
-					if let Some(message) = stream.recv().await {
-						match message {
-							Ok(msg) => proxy.send_event(Events::MessageReceived(msg)).unwrap(),
-							Err(e) => {
-								info!("Terminating websocket");
-								proxy.send_event(Events::Disconnected(e.into())).unwrap();
-								break;
-							}
-						}
-					}
-				};
-			}
-		});
-
-		self.connection = Some(Connection {
-			activity_handle,
-			stream_handle
+			});
 		});
 	}
 
 	fn close_connection(&mut self) {
-		if self.connection.is_none() { return; }
-		
-		self.connection = None;
+		self.daemon.stop();
 		self.tray.set_icon(Some(self.disconnected_icon.clone())).unwrap();
 		self.state = AppState::Disconnected;
 		info!("Disconnected");
@@ -276,6 +178,7 @@ impl ApplicationHandler<Events> for App {
 
 	fn new_events(&mut self, _event_loop: &winit::event_loop::ActiveEventLoop, cause: winit::event::StartCause) {
 		if cause == winit::event::StartCause::Init {
+			info!("Connecting");
 			self.init_connection();
 		}
 	}
@@ -288,6 +191,7 @@ impl ApplicationHandler<Events> for App {
 				info!("Connected");
 			},
 			Events::Disconnected(err) => {
+				if self.state == AppState::Disconnected { return; }
 				self.close_connection();
 
 				tokio::spawn({
@@ -295,7 +199,11 @@ impl ApplicationHandler<Events> for App {
 					let proxy = self.proxy.clone();
 					async move {
 						if settings.read().await.reconnect {
-							if let Ok(SocketError::TimeoutExpired | SocketError::SocketError(ws_error::Protocol(protocol_error::ResetWithoutClosingHandshake))) = err.downcast::<SocketError>() {
+							if let DaemonError::Socket(
+									SocketError::TimeoutExpired |
+									SocketError::SocketError(WSError::Protocol(ProtocolError::ResetWithoutClosingHandshake))
+								) = err
+							{
 								proxy.send_event(Events::Reconnect).unwrap();
 								return;
 							}
@@ -311,16 +219,21 @@ impl ApplicationHandler<Events> for App {
 					}
 				});
 			},
-			Events::Reconnect => { self.init_connection(); },
+			Events::Reconnect => {
+				info!("Reconnecting");
+				self.init_connection();
+			},
 			Events::TrayEvent(TrayIconEvent::Click { button: MouseButton::Left, button_state: MouseButtonState::Down, .. }) => {
 				if self.state == AppState::Connected { self.close_connection(); } 
-				else if self.state == AppState::Disconnected { self.init_connection(); }
+				else if self.state == AppState::Disconnected {
+					info!("Connecting");
+					self.init_connection();
+				}
 			},
 			Events::MenuEvent(MenuEvent { id }) => {
 				if id == self.menu_items.quit.id() {
-					self.close_connection();
+					if self.state != AppState::Disconnected { self.close_connection(); }
 					info!("Closing application");
-
 					event_loop.exit();
 				} else if id == self.menu_items.reload_settings.id() {
 					info!("Reloading settings");

@@ -1,7 +1,6 @@
 #![allow(dead_code)]
 
-use crate::{client::OFClient, media, user::User};
-
+use crate::{OFClient, media, user::User};
 use std::{slice, fmt};
 use futures_util::TryFutureExt;
 use reqwest::Url;

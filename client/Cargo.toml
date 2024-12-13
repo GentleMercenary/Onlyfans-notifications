@@ -6,13 +6,13 @@ edition = "2021"
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 
 [dependencies]
-log = "0.4.17"
-futures = "0.3.21"
-futures-util = "0.3.21"
-serde = { version = "1.0.140", features = ["derive"] }
-rust-crypto = "0.2.36"
+log = { workspace = true }
+futures = { workspace = true }
+futures-util = { workspace = true }
+serde = { workspace = true, features = ["derive"] }
+chrono = { workspace = true, features = ["serde"] }
 cached = { version = "0.51.4", features = ["async"] }
-chrono = { version = "0.4.19", features = ["serde"] }
-reqwest = { version = "0.12.5", features = ["cookies", "gzip", "json"] }
+reqwest = { workspace = true, features = ["cookies", "gzip", "json"] }
 reqwest_cookie_store = "0.8.0"
+rust-crypto = "0.2.36"
 httpdate = "1.0.3"
