@@ -1,8 +1,7 @@
 mod init;
 
-use of_notifier::{get_auth_params, settings::{Settings, Selection, CoarseSelection}, handlers::handle_message};
+use of_notifier::{init_client, init_cdm, settings::{Settings, Selection, CoarseSelection}, handlers::handle_message};
 use of_socket::structs::{Message, TaggedMessage};
-use of_client::OFClient;
 use std::thread::sleep;
 use std::time::Duration;
 use std::sync::Once;
@@ -23,16 +22,18 @@ macro_rules! socket_test {
 
 			let settings = RwLock::new(Settings {
 				notify: Selection::Coarse(CoarseSelection::from(true)),
+				download: Selection::Coarse(CoarseSelection::from(true)),
 				..Settings::default()
 			});
 
 			let msg = serde_json::from_str::<Message>($incoming).unwrap();
 			assert!(matches!(msg, $match));
 	
-			let params = get_auth_params().unwrap();
-			let client = OFClient::new(params).unwrap();
-			handle_message(msg, &client, &settings).await.unwrap();
-			sleep(Duration::from_millis(1000));
+			let client = init_client().unwrap();
+			let cdm = init_cdm().unwrap();
+
+			handle_message(msg, &client, &settings, Some(&cdm)).await.unwrap();
+			sleep(Duration::from_millis(10));
 		}
 	};
 }

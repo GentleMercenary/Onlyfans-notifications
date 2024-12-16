@@ -5,18 +5,9 @@ use std::{fs::{self, File}, io::{BufWriter, Write}, path::{Path, PathBuf}, sync:
 use anyhow::{anyhow, Context};
 use filetime::{set_file_mtime, FileTime};
 use futures_util::StreamExt;
-use of_client::{OFClient, content, httpdate::parse_http_date, media::{Media, MediaType}, reqwest::{header, IntoUrl, StatusCode, Url}, user::User};
+use of_client::{content, httpdate::parse_http_date, media::{Media, MediaType}, reqwest::{header, IntoUrl, StatusCode, Url}, user::User, OFClient};
 use tempdir::TempDir;
 use winrt_toast::{register, Toast, ToastManager};
-
-use crate::get_auth_params;
-
-pub fn init_client() -> anyhow::Result<OFClient> {
-	info!("Reading authentication parameters");
-	let auth_params = get_auth_params()?;
-	let client = OFClient::new(auth_params)?;
-	Ok(client)
-}
 
 pub async fn get_avatar(user: &User, client: &OFClient) -> anyhow::Result<Option<PathBuf>> {
 	match &user.avatar {

@@ -2,19 +2,24 @@
 extern crate log;
 
 pub mod structs;
+#[cfg(feature = "drm")]
+pub mod drm;
+#[cfg(feature = "drm")]
+pub use widevine;
 
 pub use reqwest;
 pub use reqwest_cookie_store;
 pub use httpdate;
 pub use structs::{content, media, user};
 
+use log::*;
 use httpdate::fmt_http_date;
 use reqwest_cookie_store::{CookieStore, CookieStoreRwLock};
 use serde::{Deserialize, Serialize};
 use cached::proc_macro::once;
 use futures::TryFutureExt;
 use crypto::{digest::Digest, sha1::Sha1};
-use reqwest::{header::{self, HeaderValue}, Client, IntoUrl, Method, RequestBuilder, Response, Url};
+use reqwest::{header::{self, HeaderValue}, Body, Client, IntoUrl, Method, RequestBuilder, Response, Url};
 use std::{borrow::Cow, sync::Arc, time::{SystemTime, UNIX_EPOCH}};
 
 pub struct AuthParams {
@@ -173,11 +178,19 @@ impl OFClient {
 		.await
 	}
 
-	pub async fn post<U: IntoUrl, T: Serialize>(&self, link: U, body: Option<&T>) -> reqwest::Result<Response> {
+	pub async fn post<U: IntoUrl, T: Into<Body>>(&self, link: U, body: Option<T>) -> reqwest::Result<Response> {
 		let mut builder = self.request(Method::POST, link).await?;
-		if let Some(body) = body { builder = builder.json(body); }
+		if let Some(body) = body { builder = builder.body(body); }
 
 		builder
+		.send()
+		.and_then(error_for_status_log)
+		.await
+	}
+
+	pub async fn post_json<U: IntoUrl, T: Serialize>(&self, link: U, body: &T) -> reqwest::Result<Response> {
+		self.request(Method::POST, link).await?
+		.json(body)
 		.send()
 		.and_then(error_for_status_log)
 		.await

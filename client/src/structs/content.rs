@@ -97,6 +97,7 @@ pub trait CanLike: Content {
 
 pub trait HasMedia: Content {
 	type Media: media::Media + Sync + Send;
+	fn id(&self) -> u64;
 	fn media(&self) -> &[Self::Media];
 }
 
@@ -113,6 +114,7 @@ impl CanLike for Post {
 
 impl HasMedia for Post {
 	type Media = media::Feed;
+	fn id(&self) -> u64 { self.id }
 	fn media(&self) -> &[Self::Media] { &self.media }
 }
 
@@ -129,6 +131,7 @@ impl CanLike for Chat {
 
 impl HasMedia for Chat {
 	type Media = media::Feed;
+	fn id(&self) -> u64 { self.id }
 	fn media(&self) -> &[Self::Media] { &self.media }
 }
 
@@ -145,6 +148,7 @@ impl CanLike for Story {
 
 impl HasMedia for Story {
 	type Media = media::Feed;
+	fn id(&self) -> u64 { self.id }
 	fn media(&self) -> &[Self::Media] { &self.media }
 }
 
@@ -158,6 +162,7 @@ impl Content for Stream {
 
 impl HasMedia for Stream {
 	type Media = media::Stream;
+	fn id(&self) -> u64 { self.id }
 	fn media(&self) -> &[Self::Media] { slice::from_ref(&self.media) }
 }
 

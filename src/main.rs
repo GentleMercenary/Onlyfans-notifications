@@ -4,10 +4,10 @@
 extern crate log;
 extern crate simplelog;
 
-use of_notifier::{get_auth_params, handlers::handle_message, helpers::{init_client, show_notification}, settings::Settings, FileParseError};
+use of_notifier::{get_auth_params, init_client, init_cdm, handlers::handle_message, helpers::show_notification, settings::Settings, FileParseError};
 use chrono::Local;
 use of_socket::{socket::SocketError, structs::Message, DaemonError, ProtocolError, SocketDaemon, WSError};
-use of_client::OFClient;
+use of_client::{widevine::Cdm, OFClient};
 use tray_icon::{menu::{Menu, MenuEvent, MenuItem}, Icon, MouseButton, MouseButtonState, TrayIcon, TrayIconBuilder, TrayIconEvent};
 use winit::{application::ApplicationHandler, event_loop::{ControlFlow, EventLoop, EventLoopProxy}};
 use winrt_toast::{Toast, ToastDuration};
@@ -99,6 +99,15 @@ async fn main() -> anyhow::Result<()> {
 			move |msg| { proxy.send_event(Events::MessageReceived(msg)).unwrap(); }
 		});
 
+	let cdm = init_cdm()
+		.inspect_err(|e| warn!("CDM could not be initialized: {e}"))
+		.ok();
+
+	if cdm.is_some() {
+		ffmpeg_sidecar::download::auto_download()
+		.inspect_err(|e| error!("FFmpeg installation failed: {e}"))?;
+	}
+
 	let mut app = App {
 		tray,
 		proxy,
@@ -107,6 +116,7 @@ async fn main() -> anyhow::Result<()> {
 		settings: Arc::new(RwLock::new(settings)),
 		state: AppState::Connecting,
 		client,
+		cdm,
 		daemon,
 		menu_items: MenuItems {
 			quit: quit_item,
@@ -145,6 +155,7 @@ struct App {
 	disconnected_icon: Icon,
 	settings: Arc<RwLock<Settings>>,
 	client: OFClient,
+	cdm: Option<Cdm>,
 	state: AppState,
 	daemon: SocketDaemon,
 	menu_items: MenuItems
@@ -257,8 +268,9 @@ impl ApplicationHandler<Events> for App {
 			Events::MessageReceived(msg) => {
 				let client = self.client.clone();
 				let settings = self.settings.clone();
+				let cdm = self.cdm.clone();
 				tokio::spawn(async move {
-					let _ = handle_message(msg, &client, settings.as_ref()).await;
+					let _ = handle_message(msg, &client, settings.as_ref(), cdm.as_ref()).await;
 				});
 			}
 			_ => ()

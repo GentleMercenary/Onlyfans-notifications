@@ -47,5 +47,8 @@ chrono = { workspace = true }
 tempdir = "0.3.7"
 filetime = "0.2.17"
 
-of-client = { path = "client" }
+base16 = "0.2"
+ffmpeg-sidecar = "2.0.5"
+
+of-client = { path = "client", features = ["drm"] }
 of-socket = { path = "daemon" }

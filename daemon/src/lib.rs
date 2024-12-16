@@ -81,7 +81,7 @@ impl SocketDaemon {
 					sleep(intervals.next().unwrap()).await;
 					let click = rand::random::<ClickStats>();
 					trace!("Simulating site activity: {}", serde_json::to_string(&click).unwrap());
-					let _ = client.post("https://onlyfans.com/api2/v2/users/clicks-stats", Some(&click)).await;
+					let _ = client.post_json("https://onlyfans.com/api2/v2/users/clicks-stats", &click).await;
 				}
 			}
 		});

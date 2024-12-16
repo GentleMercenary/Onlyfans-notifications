@@ -7,9 +7,9 @@ pub mod settings;
 #[macro_use]
 extern crate log;
 
-use std::{fs, io};
+use std::{fs::{self, File}, io};
 use cookie::{Cookie, ParseError};
-use of_client::{AuthParams, reqwest_cookie_store::CookieStore};
+use of_client::{reqwest_cookie_store::CookieStore, widevine::{Cdm, Device}, AuthParams, OFClient};
 use reqwest::Url;
 use serde::{Deserialize, Deserializer, de::Error};
 use thiserror::Error;
@@ -99,4 +99,18 @@ pub fn get_auth_params() -> Result<AuthParams, AuthParseError> {
 		x_bc: parsed.x_bc.to_string(),
 		user_agent: parsed.user_agent.to_string()
 	})
+}
+
+pub fn init_client() -> anyhow::Result<OFClient> {
+	info!("Reading authentication parameters");
+	let auth_params = get_auth_params()?;
+	let client = OFClient::new(auth_params)?;
+	Ok(client)
+}
+
+pub fn init_cdm() -> anyhow::Result<Cdm> {
+	let wvd = File::open("device.wvd")?;
+	let device = Device::read_wvd(wvd)?;
+	
+	Ok(Cdm::new(device))
 }
