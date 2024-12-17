@@ -1,0 +1,24 @@
+name: Build and bundle OF Notifier
+
+on: workflow_dispatch
+jobs:
+  build:
+    runs-on: windows-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v3
+
+      - name: Build
+        run: |
+          cargo build --release
+          move target/release/of-notifier.exe .
+
+      - name: Upload
+        uses: actions/upload-artifact@v4
+        with:
+          name: of-notifier
+          path: |
+            of-notifier.exe
+            settings.json
+            auth.json
+            icons/
