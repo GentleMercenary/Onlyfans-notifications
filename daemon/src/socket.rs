@@ -42,12 +42,10 @@ impl TryFrom<Message> for structs::Message {
 	}
 }
 
-static HEARTBEAT: LazyLock<Message> = LazyLock::new(|| {
-	Message::from(
-		serde_json::to_vec(
+static HEARTBEAT: LazyLock<String> = LazyLock::new(|| {
+	serde_json::to_string(
 			&structs::Heartbeat { act: "get_onlines", ids: &[] }
 		).unwrap()
-	)
 });
 
 pub struct Disconnected;
@@ -111,8 +109,10 @@ impl WebSocketClient<Disconnected> {
 			tokio::spawn(async move {
 				loop {
 					let last_send_time = Instant::now();
-					trace!("Sending heartbeat: {HEARTBEAT:?}");
-					if let Err(e) = sink.send(HEARTBEAT.clone()).await {
+
+					let heartbeat = HEARTBEAT.as_str();
+					trace!("Sending heartbeat: {heartbeat:?}");
+					if let Err(e) = sink.send(Message::from(heartbeat)).await {
 						error!("{e:?}");
 						if let Some(callback) = callback { callback(Err(e.into())); };
 						break;

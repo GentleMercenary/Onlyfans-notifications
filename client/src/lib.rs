@@ -18,7 +18,7 @@ use reqwest_cookie_store::{CookieStore, CookieStoreRwLock};
 use serde::{Deserialize, Serialize};
 use cached::proc_macro::once;
 use futures::TryFutureExt;
-use crypto::{digest::Digest, sha1::Sha1};
+use sha1_smol::Sha1;
 use reqwest::{header::{self, HeaderValue}, Body, Client, IntoUrl, Method, RequestBuilder, Response, Url};
 use std::{borrow::Cow, sync::Arc, time::{SystemTime, UNIX_EPOCH}};
 
@@ -117,22 +117,18 @@ impl OFClient {
 			.to_string();
 		
 		let mut hasher = Sha1::new();
-		hasher.input_str(
-			&[
-				&dynamic_rules.static_param,
-				&time,
-				&*url_param,
-				&self.headers.user_id
-			].join("\n")
-		);
+		hasher.update(dynamic_rules.static_param.as_bytes());	hasher.update(b"\n");
+		hasher.update(time.as_bytes());							hasher.update(b"\n");
+		hasher.update(url_param.as_bytes());					hasher.update(b"\n");
+		hasher.update(self.headers.user_id.as_bytes());
 
-		let sha_hash = hasher.result_str();
-		let hash_ascii = sha_hash.as_bytes();
+		let digest = hasher.digest().to_string();
+		let digest_bytes = digest.as_bytes();
 
 		let checksum = dynamic_rules
 		.checksum_indexes
 		.into_iter()
-		.map(|x| hash_ascii[x] as i32)
+		.map(|x| digest_bytes[x] as i32)
 		.sum::<i32>() + dynamic_rules.checksum_constant;
 	
 		let mut headers = header::HeaderMap::new();
@@ -145,7 +141,7 @@ impl OFClient {
 		headers.insert("sign", HeaderValue::from_str(
 			&format!("{}:{}:{:x}:{}",
 				dynamic_rules.prefix,
-				sha_hash,
+				digest,
 				checksum.abs(),
 				dynamic_rules.suffix
 			)

@@ -14,24 +14,24 @@ members = [
 ]
 
 [workspace.dependencies]
-log = "0.4.17"
-thiserror = "2.0.4"
+log = "0.4.22"
+thiserror = "2.0.9"
 futures = "0.3.21"
 futures-util = "0.3.21"
-serde_json = "1.0.82"
-tokio = "1.29.0"
-serde = { version = "1.0.140", features = ["derive"] }
-reqwest = "0.12.5"
-chrono = "0.4.19"
+serde_json = "1.0.134"
+tokio = "1.42.0"
+serde = { version = "1.0.216", features = ["derive"] }
+reqwest = "0.12.9"
+chrono = "0.4.39"
 
 [dependencies]
 thiserror = { workspace = true }
-anyhow = "1.0.66"
+anyhow = "1.0.95"
 
 log = { workspace = true, features = ["serde"] }
-simplelog = "0.12.0"
+simplelog = "0.12.2"
 
-winit = "0.30.5"
+winit = "0.30.8"
 tray-icon = "0.19.2"
 winrt-toast = "0.1.1"
 
@@ -46,8 +46,8 @@ nanohtml2text = "0.2.1"
 cookie = "0.18.1"
 
 chrono = { workspace = true }
-tempdir = "0.3.7"
-filetime = "0.2.17"
+tempfile = "3.14.0"
+filetime = "0.2.25"
 
 base16 = "0.2"
 ffmpeg-sidecar = "2.0.5"

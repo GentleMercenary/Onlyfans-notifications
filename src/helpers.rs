@@ -6,7 +6,7 @@ use anyhow::{anyhow, Context};
 use filetime::{set_file_mtime, FileTime};
 use futures_util::StreamExt;
 use of_client::{content, httpdate::parse_http_date, media::{Media, MediaType}, reqwest::{header, IntoUrl, StatusCode, Url}, user::User, OFClient};
-use tempdir::TempDir;
+use tempfile::TempDir;
 use winrt_toast::{register, Toast, ToastManager};
 
 pub async fn get_avatar(user: &User, client: &OFClient) -> anyhow::Result<Option<PathBuf>> {
@@ -41,14 +41,13 @@ pub async fn get_thumbnail<T: content::HasMedia>(content: &T, client: &OFClient)
 	match thumb {
 		Some(thumb) => {
 			static TEMPDIR: OnceLock<TempDir> = OnceLock::new();
-			let temp_dir = TEMPDIR.get_or_init(|| TempDir::new("OF_thumbs")
+			let temp_dir = TEMPDIR.get_or_init(|| TempDir::new()
 				.expect("Creating temporary directory"));
 			let (_, path) = fetch_file(client, thumb, temp_dir.path(), None).await?;
 			Ok(Some(path))
 		},
 		None => Ok(None)
 	}
-
 }
 
 pub async fn fetch_file<U: IntoUrl>(client: &OFClient, link: U, path: &Path, filename: Option<&str>) -> anyhow::Result<(bool, PathBuf)> {
