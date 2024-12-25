@@ -1,6 +1,6 @@
 #![allow(dead_code)]
 
-use crate::deserializers::{notification_message, from_str, from_str_vec};
+use crate::deserializers::{from, from_str, from_str_seq};
 
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
@@ -47,7 +47,7 @@ pub struct PostPublished {
 struct Fundraising {
 	target: f32,
 	target_progress: f32,
-	#[serde(deserialize_with="from_str_vec")]
+	#[serde(deserialize_with="from_str_seq")]
 	presets: Vec<f32>
 }
 	
@@ -90,13 +90,13 @@ struct ShortUser {
 }
 
 #[derive(Deserialize, Debug)]
-pub struct StoryTips {
+pub struct StoryTip {
 	id: u64,
 	from_user: ShortUser,
 	story_user_id: u64,
 	story_id: u64,
 	amount: f32,
-	message: String
+	message: Option<String>
 }
 
 #[derive(Deserialize, Debug)]
@@ -108,6 +108,27 @@ pub struct Notification {
 	sub_type: String,
 	#[serde(flatten)]
 	pub content: content::Notification,
+}
+
+#[derive(Deserialize, Debug)]
+#[serde(rename_all = "camelCase")]
+pub struct NewMessage {
+	#[serde(rename = "new_message")]
+	new_message: Notification,
+	has_system_notifications: bool
+}
+
+impl From<NewMessage> for Notification {
+	fn from(value: NewMessage) -> Self {
+		value.new_message
+	}
+}
+
+#[derive(Deserialize, Debug)]
+#[serde(rename_all = "camelCase")]
+pub struct Messages {
+	messages: u32,
+	has_system_notifications: bool
 }
 
 #[derive(Deserialize, Debug)]
@@ -181,6 +202,25 @@ pub struct StreamLike {
 }
 
 #[derive(Deserialize, Debug)]
+pub struct StreamTip {
+	id: u64,
+	from_user: User,
+	stream_user_id: u64,
+	stream_id: u64,
+	amount: f32,
+	message: Option<String>
+}
+
+#[derive(Deserialize, Debug)]
+pub struct StreamTips {
+	stream_tips: StreamTip,
+	tips_count: u32,
+	tips_goal: String,
+	tips_goal_sum: f32,
+	tips_goal_progress: f32
+}
+
+#[derive(Deserialize, Debug)]
 #[serde(rename_all = "snake_case")]
 pub enum TaggedMessage {
 	PostPublished(PostPublished),
@@ -193,7 +233,7 @@ pub enum TaggedMessage {
 	Api2ChatMessage(Chat),
 
 	Stories(Vec<Story>),
-	StoryTips(StoryTips),
+	StoryTips(StoryTip),
 
 	Stream(Stream),
 	StreamStart(StreamStart),
@@ -202,7 +242,9 @@ pub enum TaggedMessage {
 	StreamLook(StreamLook),
 	StreamUnlook(StreamLook),
 	StreamComment(StreamComment),
-	StreamLike(StreamLike)
+	StreamLike(StreamLike),
+
+	HasNewHints(bool),
 }
 
 #[derive(Deserialize, Debug)]
@@ -212,8 +254,9 @@ pub enum Message {
 	Onlines(Onlines),
 	ChatCount(ChatCount),
 	Connected(Connected),
-	#[serde(deserialize_with = "notification_message")]
-	#[allow(clippy::enum_variant_names)]
-	NewMessage(Notification),
+	NotificationCount(Messages),
+	#[serde(deserialize_with = "from::<_, NewMessage, _>")]
+	Notification(Notification),
+	StreamTips(StreamTips),
 	Error(Error),
 }

@@ -20,7 +20,7 @@ pub async fn handle_message(message: Message, client: &OFClient, settings: &RwLo
 		},
 		_ => {
 			match message {
-				Message::NewMessage(msg) => {
+				Message::Notification(msg) => {
 					info!("Notification message received: {:?}", msg);
 
 					let settings = settings.read().await;

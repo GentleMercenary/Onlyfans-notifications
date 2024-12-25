@@ -148,7 +148,9 @@ socket_test!(test_notification_message, r#"{
 		}
 	},
 	"hasSystemNotifications": false
-	}"#, Message::NewMessage(_));
+}"#, Message::Notification(_));
+
+socket_test!(test_notification_count_message, r#"{"messages":1,"hasSystemNotifications":false}"#, Message::NotificationCount(_));
 
 socket_test!(test_stream_message, r#"{
 	"stream": {
@@ -263,8 +265,36 @@ socket_test!(test_stream_like_message, r#"{
 	}
 }"#, Message::Tagged(TaggedMessage::StreamLike(_)));
 
+socket_test!(test_stream_tips_message, r#"{
+	"stream_tips": {
+		"id": 1234,
+		"from_user": {
+			"avatar": "https://public.onlyfans.com/files/m/mk/mka/mkamcrf6rjmcwo0jj4zoavhmalzohe5a1640180203/avatar.jpg",
+			"id": 15585607,
+			"name": "OnlyFans",
+			"username": "onlyfans"
+		},
+		"stream_user_id": 15585607,
+		"stream_id": 5678,
+		"amount": 5,
+		"amount_human": "$5.00",
+		"message": null
+	},
+	"is_show_tips": true,
+	"tips_count": 5,
+	"tips_summ": 24.5,
+	"is_show_tips_goal": true,
+	"tips_goal": "$100 Tip goal \u2665",
+	"tips_goal_sum": 100,
+	"tips_goal_progress": 24.5
+}"#, Message::StreamTips(_));
+
+
+
 socket_test!(test_chat_count_message, r#"{
 	"chat_messages": 3,
 	"count_priority_chat": 2,
 	"unread_tips": 1
 }"#, Message::ChatCount(_));
+
+socket_test!(test_new_hints_message, r#"{"has_new_hints":true}"#, Message::Tagged(TaggedMessage::HasNewHints(_)));
