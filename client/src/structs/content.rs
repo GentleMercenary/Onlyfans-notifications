@@ -72,6 +72,8 @@ pub struct Story {
 pub struct Notification {
 	id: String,
 	pub text: String,
+	#[serde(default = "Utc::now")]
+	created_at: DateTime<Utc>,
 }
 
 #[derive(Deserialize, Debug)]
@@ -87,6 +89,7 @@ pub struct Stream {
 }
 
 pub trait Content {
+	fn timestamp(&self) -> DateTime<Utc>; 
 	fn content_type() -> ContentType;
 }
 
@@ -102,6 +105,7 @@ pub trait HasMedia: Content {
 }
 
 impl Content for Post {
+	fn timestamp(&self) -> DateTime<Utc> { self.posted_at }
 	fn content_type() -> ContentType { ContentType::Posts }
 }
 
@@ -119,6 +123,7 @@ impl HasMedia for Post {
 }
 
 impl Content for Chat {
+	fn timestamp(&self) -> DateTime<Utc> { self.created_at }
 	fn content_type() -> ContentType { ContentType::Chats }
 }
 
@@ -136,6 +141,7 @@ impl HasMedia for Chat {
 }
 
 impl Content for Story {
+	fn timestamp(&self) -> DateTime<Utc> { self.created_at }
 	fn content_type() -> ContentType { ContentType::Stories }
 }
 
@@ -153,10 +159,12 @@ impl HasMedia for Story {
 }
 
 impl Content for Notification {
+	fn timestamp(&self) -> DateTime<Utc> { self.created_at }
 	fn content_type() -> ContentType { ContentType::Notifications }
 }
 
 impl Content for Stream {
+	fn timestamp(&self) -> DateTime<Utc> { self.started_at }
 	fn content_type() -> ContentType { ContentType::Streams }
 }
 

@@ -159,15 +159,22 @@ impl ToToast for content::Stream {
 	}
 }
 
-async fn notify<T: ToToast + content::Content>(content: &T, user: &User, client: &OFClient) -> anyhow::Result<()> {
+fn setup_notification<T: ToToast + content::Content>(content: &T, user: &User) -> Toast {
 	let header = T::content_type().to_string();
 	let mut toast = content.to_toast();
 
-	let avatar = get_avatar(user, client).await?;
-
 	toast
 	.header(Header::new(&header, &header, ""))
+	.timestamp(content.timestamp())
 	.text1(&user.name);
+
+	toast
+}
+
+async fn notify<T: ToToast + content::Content>(content: &T, user: &User, client: &OFClient) -> anyhow::Result<()> {
+	let avatar = get_avatar(user, client).await?;
+
+	let mut toast = setup_notification(content, user);
 
 	if let Some(avatar) = avatar {
 		toast.image(1, 
@@ -182,14 +189,9 @@ async fn notify<T: ToToast + content::Content>(content: &T, user: &User, client:
 }
 
 async fn notify_with_thumbnail<T: ToToast + content::HasMedia>(content: &T, user: &User, client: &OFClient) -> anyhow::Result<()> {
-	let header = T::content_type().to_string();
-	let mut toast = content.to_toast();
-
 	let (avatar, thumbnail) = try_join(get_avatar(user, client), get_thumbnail(content, client)).await?;
-
-	toast
-	.header(Header::new(&header, &header, ""))
-	.text1(html2text(&user.name));
+	
+	let mut toast = setup_notification(content, user);
 
 	if let Some(avatar) = avatar {
 		toast.image(1, 

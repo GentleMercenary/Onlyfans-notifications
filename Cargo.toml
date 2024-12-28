@@ -55,6 +55,9 @@ ffmpeg-sidecar = "2.0.5"
 of-client = { path = "client", features = ["drm"] }
 of-socket = { path = "daemon" }
 
+[patch.crates-io]
+winrt-toast = { git = "https://github.com/GentleMercenary/winrt-toast.git" }
+
 [profile.release]
 strip = true
 trim-paths = true
