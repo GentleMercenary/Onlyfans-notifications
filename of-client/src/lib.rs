@@ -42,7 +42,6 @@ struct DynamicRules {
 #[once(time = 3600, result = true, sync_writes = true)]
 async fn get_dynamic_rules() -> reqwest::Result<DynamicRules> {
 	reqwest::get("https://raw.githubusercontent.com/deviint/onlyfans-dynamic-rules/main/dynamicRules.json")
-	.inspect_err(|err| error!("Error getting dynamic rules: {err:?}"))
 	.and_then(Response::json::<DynamicRules>)
 	.await
 	.inspect_err(|err| error!("Error reading dynamic rules: {err:?}"))

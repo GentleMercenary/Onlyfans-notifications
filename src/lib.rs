@@ -4,9 +4,7 @@ pub mod helpers;
 pub mod handlers;
 pub mod settings;
 
-#[macro_use]
-extern crate log;
-
+use log::*;
 use std::{fs::{self, File}, io};
 use cookie::{Cookie, ParseError};
 use of_client::{reqwest_cookie_store::CookieStore, widevine::{Cdm, Device}, AuthParams, OFClient};

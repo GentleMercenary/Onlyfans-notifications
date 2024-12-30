@@ -1,6 +1,6 @@
 #![allow(dead_code)]
 
-use crate::deserializers::{from, from_str, from_str_seq};
+use deserializers::{from, from_str, from_str_seq};
 
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};

@@ -1,5 +1,5 @@
 [package]
-name = "of-socket"
+name = "of-daemon"
 version = "0.1.0"
 edition = "2021"
 
@@ -13,9 +13,9 @@ futures-util = { workspace = true }
 tokio = { workspace = true, features = ["sync"] }
 chrono = { workspace = true, features = ["serde"] }
 tokio-tungstenite = { version = "0.26.1", features = ["native-tls"] }
+of-client = { workspace = true }
+deserializers = { workspace = true }
 serde_json = { workspace = true }
 serde = { workspace = true }
 rand_distr = "0.4.3"
 rand = "0.8.5"
-
-of-client = { path = "../client" }

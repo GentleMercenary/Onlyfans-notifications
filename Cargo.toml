@@ -9,8 +9,9 @@ edition = "2021"
 
 [workspace]
 members = [
-	"client",
-	"daemon",
+	"of-deserializers",
+	"of-client",
+	"of-daemon",
 ]
 
 [workspace.dependencies]
@@ -23,6 +24,10 @@ tokio = "1.42.0"
 serde = { version = "1.0.216", features = ["derive"] }
 reqwest = "0.12.9"
 chrono = "0.4.39"
+
+deserializers = { path = "of-deserializers" }
+of-client = { path = "of-client" }
+of-daemon = { path = "of-daemon" }
 
 [dependencies]
 thiserror = { workspace = true }
@@ -52,8 +57,8 @@ filetime = "0.2.25"
 base16 = "0.2"
 ffmpeg-sidecar = "2.0.5"
 
-of-client = { path = "client", features = ["drm"] }
-of-socket = { path = "daemon" }
+of-client = { workspace = true, features = ["drm"] }
+of-daemon = { workspace = true }
 
 [patch.crates-io]
 winrt-toast = { git = "https://github.com/GentleMercenary/winrt-toast.git" }

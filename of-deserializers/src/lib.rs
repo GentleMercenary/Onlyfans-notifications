@@ -37,7 +37,7 @@ where
 		type Value = Vec<T>;
 
 		fn expecting(&self, formatter: &mut std::fmt::Formatter) -> std::fmt::Result {
-			formatter.write_str("a sequence of things that implement FromStr")
+			formatter.write_str("a sequence of strings")
 		}
 
 		fn visit_seq<S>(self, mut seq: S) -> Result<Self::Value, S::Error>
@@ -58,7 +58,5 @@ where
 		}
 	}
 
-	let visitor = SeqVisitor(PhantomData);
-	deserializer.deserialize_seq(visitor)
-
+	deserializer.deserialize_seq(SeqVisitor(PhantomData))
 }

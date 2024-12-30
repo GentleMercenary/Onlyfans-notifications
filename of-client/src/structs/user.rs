@@ -47,7 +47,7 @@ impl IDType for u64 {}
 
 impl OFClient {
 	pub async fn get_user<I: IDType>(&self, user_id: I) -> reqwest::Result<User> {
-		self.get(&format!("https://onlyfans.com/api2/v2/users/{user_id}"))
+		self.get(format!("https://onlyfans.com/api2/v2/users/{user_id}"))
 		.and_then(|response| response.json::<User>().map_err(Into::into))
 		.await
 		.inspect(|user| info!("Got user: {:?}", user))
@@ -55,7 +55,7 @@ impl OFClient {
 	}
 
 	pub async fn subscribe<I: IDType>(&self, user_id: I) -> reqwest::Result<User> {
-		self.post(&format!("https://onlyfans.com/api2/v2/users/{user_id}/subscribe"), None::<&[u8]>)
+		self.post(format!("https://onlyfans.com/api2/v2/users/{user_id}/subscribe"), None::<&[u8]>)
 		.and_then(|response| response.json::<User>())
 		.await
 		.inspect(|user| info!("Got user: {:?}", user))
@@ -69,7 +69,7 @@ impl OFClient {
 		.inspect_err(|err| error!("Error reading subscribe counts: {err:?}"))
 		.map(|counts| counts.subscriptions.all)?;
 
-		self.get(&format!("https://onlyfans.com/api2/v2/subscriptions/subscribes?limit={count}&offset=0&type=all"))
+		self.get(format!("https://onlyfans.com/api2/v2/subscriptions/subscribes?limit={count}&offset=0&type=all"))
 		.and_then(|response| response.json::<Vec<User>>())
 		.await
 	}

@@ -1,12 +1,9 @@
-#![allow(dead_code)]
-
+use log::*;
 use std::{fs::{self, File}, io::{BufWriter, Write}, path::{Path, PathBuf}, sync::{Mutex, OnceLock}};
-
 use anyhow::{anyhow, Context};
 use filetime::{set_file_mtime, FileTime};
 use futures_util::StreamExt;
 use of_client::{content, httpdate::parse_http_date, media::{Media, MediaType}, reqwest::{header, IntoUrl, StatusCode, Url}, user::User, OFClient};
-use tempfile::TempDir;
 use winrt_toast::{register, Toast, ToastManager};
 
 pub async fn get_avatar(user: &User, client: &OFClient) -> anyhow::Result<Option<PathBuf>> {
@@ -24,14 +21,14 @@ pub async fn get_avatar(user: &User, client: &OFClient) -> anyhow::Result<Option
 				.ok_or_else(|| anyhow!("Filename unknown"))?;
 	
 			let user_path = Path::new("data").join(&user.username);
-			let (_, avatar) = fetch_file(client, avatar, &user_path.join("Profile").join("Avatars"), Some(&filename)).await?;
-			Ok(Some(avatar))
+			fetch_file(client, avatar, &user_path.join("Profile").join("Avatars"), Some(&filename)).await
+			.map(|(_, path)| Some(path))
 		},
 		None => Ok(None)
 	}
 }
 
-pub async fn get_thumbnail<T: content::HasMedia>(content: &T, client: &OFClient) -> anyhow::Result<Option<PathBuf>> {
+pub async fn get_thumbnail<T: content::HasMedia>(content: &T, client: &OFClient, temp_dir: &Path) -> anyhow::Result<Option<PathBuf>> {
 	let thumb = content
 	.media()
 	.iter()
@@ -39,12 +36,9 @@ pub async fn get_thumbnail<T: content::HasMedia>(content: &T, client: &OFClient)
 	.find_map(|media| media.thumbnail().filter(|s| !s.is_empty()));
 
 	match thumb {
-		Some(thumb) => {
-			static TEMPDIR: OnceLock<TempDir> = OnceLock::new();
-			let temp_dir = TEMPDIR.get_or_init(|| TempDir::new()
-				.expect("Creating temporary directory"));
-			let (_, path) = fetch_file(client, thumb, temp_dir.path(), None).await?;
-			Ok(Some(path))
+		Some(thumb) => {	
+			fetch_file(client, thumb, temp_dir, None).await
+			.map(|(_, path)| Some(path))
 		},
 		None => Ok(None)
 	}

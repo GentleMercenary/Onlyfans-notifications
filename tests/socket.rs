@@ -1,39 +1,38 @@
 mod init;
 
-use of_notifier::{init_client, init_cdm, settings::{Settings, Selection, CoarseSelection}, handlers::handle_message};
-use of_socket::structs::{Message, TaggedMessage};
-use std::thread::sleep;
-use std::time::Duration;
-use std::sync::Once;
-use tokio::sync::RwLock;
+use of_notifier::{handlers::Context, init_cdm, init_client, settings::{CoarseSelection, Selection, Settings}};
+use of_daemon::structs::{Message, TaggedMessage};
+use std::{sync::{Once, OnceLock, Arc, RwLock}, thread::sleep, time::Duration};
 use init::init_log;
 
 static INIT: Once = Once::new();
-
-fn test_init() {
-	INIT.call_once(|| { init_log(); });
-}
+static HANDLER: OnceLock<Context> = OnceLock::new();
 
 macro_rules! socket_test {
 	($name: ident, $incoming: expr, $match: pat) => {
 		#[tokio::test]
 		async fn $name() {
-			test_init();
-
-			let settings = RwLock::new(Settings {
-				notify: Selection::Coarse(CoarseSelection::from(true)),
-				download: Selection::Coarse(CoarseSelection::from(true)),
-				..Settings::default()
-			});
+			INIT.call_once(|| { init_log(); });
 
 			let msg = serde_json::from_str::<Message>($incoming).unwrap();
 			assert!(matches!(msg, $match));
 	
-			let client = init_client().unwrap();
-			let cdm = init_cdm().unwrap();
+			let context = HANDLER.get_or_init(|| {
+				let settings = Settings {
+					notify: Selection::Coarse(CoarseSelection::from(true)),
+					download: Selection::Coarse(CoarseSelection::from(false)),
+					..Settings::default()
+				};
 
-			handle_message(msg, &client, &settings, Some(&cdm)).await.unwrap();
-			sleep(Duration::from_millis(10));
+				let client = init_client().unwrap();
+				let cdm = init_cdm().ok();
+				Context::new(client, cdm, Arc::new(RwLock::new(settings))).unwrap()
+			});
+
+			if let Some(handle) = context.spawn_handle(msg).unwrap() {
+				let _ = handle.await;
+				sleep(Duration::from_millis(10));
+			}
 		}
 	};
 }
