@@ -5,9 +5,9 @@ pub mod handlers;
 pub mod settings;
 
 use log::*;
-use std::{fs::{self, File}, io};
+use std::{fs::{self, File}, io, sync::Arc};
 use cookie::{Cookie, ParseError};
-use of_client::{reqwest_cookie_store::CookieStore, widevine::{Cdm, Device}, AuthParams, OFClient};
+use of_client::{reqwest_cookie_store::{CookieStore, CookieStoreRwLock}, widevine::{Cdm, Device}, OFClient, RequestHeaders};
 use reqwest::Url;
 use serde::{Deserialize, Deserializer, de::Error};
 use thiserror::Error;
@@ -29,7 +29,7 @@ pub enum AuthParseError {
 	#[error("{0}")]
 	CookieParse(#[from] ParseError),
 	#[error("Cookie is missing '{0}' field")]
-	IncompleteCookie(String)
+	IncompleteCookie(&'static str)
 }
 
 fn non_empty_str<'de, D>(deserializer: D) -> Result<&'de str, D::Error>
@@ -40,6 +40,24 @@ where
 	(!s.is_empty())
 	.then_some(s)
 	.ok_or_else(|| D::Error::custom("Empty string"))
+}
+
+pub struct AuthParams {
+	pub cookie: CookieStore,
+	pub user_id: String,
+	pub x_bc: String,
+	pub user_agent: String,
+}
+
+impl From<AuthParams> for RequestHeaders {
+	fn from(value: AuthParams) -> Self {
+		Self {
+			cookie: Arc::new(CookieStoreRwLock::new(value.cookie)),
+			user_id: value.user_id,
+			user_agent: value.user_agent,
+			x_bc: value.x_bc
+		}
+	}
 }
 
 pub fn get_auth_params() -> Result<AuthParams, AuthParseError> {
@@ -82,13 +100,13 @@ pub fn get_auth_params() -> Result<AuthParams, AuthParseError> {
 	}
 	
 	if !store.contains_any(url.domain().unwrap(), url.path(), "sess") {
-		return Err(AuthParseError::IncompleteCookie("sess".to_string()))
+		return Err(AuthParseError::IncompleteCookie("sess"))
 			.inspect_err(|err| error!("{err}"))
 	}
 
 	let user_id = store.get_any(url.domain().unwrap(), url.path(), "auth_id")
 		.map(|cookie| cookie.value().to_string())
-		.ok_or_else(|| AuthParseError::IncompleteCookie("auth_id".to_string()))
+		.ok_or(AuthParseError::IncompleteCookie("auth_id"))
 		.inspect_err(|err| error!("{err}"))?;
 
 	Ok(AuthParams {

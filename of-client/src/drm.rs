@@ -43,20 +43,22 @@ impl OFClient {
 	pub async fn get_mpd_data(&self, drm: &DRM) -> Result<MPDData, MPDFetchError> {
 		let signature = &drm.signature.dash;
 		let mpd = Url::parse(&drm.manifest.dash).unwrap();
-
-		{
-			let mut write_lock = self.headers.cookie.write().unwrap();
+		
+		let header_map = {
+			let headers = self.headers.read().unwrap();
+			let mut write_lock = headers.cookie.write().unwrap();
 			write_lock.insert_raw(&RawCookie::new("CloudFront-Policy", &signature.policy), &mpd).unwrap();
 			write_lock.insert_raw(&RawCookie::new("CloudFront-Signature", &signature.signature), &mpd).unwrap();
 			write_lock.insert_raw(&RawCookie::new("CloudFront-Key-Pair-Id", &signature.key_pair), &mpd).unwrap();
-		}
 
-		let mut headers = HeaderMap::new();
-		headers.insert(header::ACCEPT, HeaderValue::from_static("*/*"));
-		headers.insert(header::USER_AGENT, HeaderValue::from_str(&self.headers.user_agent).unwrap());
+			let mut header_map = HeaderMap::new();
+			header_map.insert(header::ACCEPT, HeaderValue::from_static("*/*"));
+			header_map.insert(header::USER_AGENT, HeaderValue::from_str(&headers.user_agent).unwrap());
+			header_map
+		};
 
 		let response = self.client.request(Method::GET, mpd)
-			.headers(headers)
+			.headers(header_map)
 			.send()
 			.await?;
 
@@ -120,14 +122,15 @@ impl OFClient {
 	pub fn mpd_header(&self, manifest_url: &str) -> String {
 		let url = Url::parse(manifest_url).unwrap();
 		let mut cookie = String::new();
+		let headers = self.headers.read().unwrap();
 
-		for (name, val) in self.headers.cookie.read().unwrap().get_request_values(&url) {
+		for (name, val) in headers.cookie.read().unwrap().get_request_values(&url) {
 			cookie.push_str(name);
 			cookie.push('=');
 			cookie.push_str(val);
 			cookie.push(';');
 		}
 
-		format!("Cookie:{cookie} User-Agent: {}", self.headers.user_agent)
+		format!("Cookie:{cookie} User-Agent: {}", headers.user_agent)
 	}
 }

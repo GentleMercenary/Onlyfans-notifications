@@ -1,7 +1,7 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
 use log::*;
-use of_client::OFClient;
+use of_client::RequestHeaders;
 use of_notifier::{get_auth_params, handlers::Context, helpers::show_notification, init_cdm, init_client, settings::Settings, FileParseError};
 use of_daemon::{socket::SocketError, tungstenite::error::{Error as WSError, ProtocolError}, Daemon, DaemonError};
 use tray_icon::{menu::{Menu, MenuEvent, MenuItem}, Icon, MouseButton, MouseButtonState, TrayIcon, TrayIconBuilder, TrayIconEvent};
@@ -36,6 +36,7 @@ async fn main() -> anyhow::Result<()> {
 	])?;
 
 	let client = init_client()?;
+	let client_params = client.headers.clone();
 
 	let cdm = init_cdm()
 		.inspect_err(|e| warn!("CDM could not be initialized: {e}"))
@@ -65,7 +66,7 @@ async fn main() -> anyhow::Result<()> {
 			let context = Context::new(client.clone(), cdm, settings.clone()).unwrap();
 			move |message| { let _ = context.spawn_handle(message); }
 		})
-		.build(client.clone());
+		.build(client);
 
 	let mut app = App {
 		should_quit: false,
@@ -73,7 +74,7 @@ async fn main() -> anyhow::Result<()> {
 		tray: None,
 		event_loop: event_loop.create_proxy(),
 		settings,
-		client,
+		client_params,
 		toggle_daemon,
 	};
 
@@ -114,7 +115,7 @@ struct App {
 	tray: Option<Tray>,
 	event_loop: EventLoopProxy<Events>,
 	settings: Arc<RwLock<Settings>>,
-	client: OFClient,
+	client_params: Arc<RwLock<RequestHeaders>>,
 	toggle_daemon: Arc<Notify>,
 }
 
@@ -264,7 +265,7 @@ impl ApplicationHandler<Events> for App {
 				} else if id == menu_items.reload_auth.id() {
 					info!("Reloading authentication parameters");
 					if let Ok(new_auth) = get_auth_params() {
-						self.client.set_auth_params(new_auth);
+						*self.client_params.write().unwrap() = new_auth.into();
 						info!("Successfully updated authentication parameters");
 					}
 				}
