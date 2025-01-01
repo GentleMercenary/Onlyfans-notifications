@@ -1,8 +1,10 @@
 use log::*;
-use std::{fs::{self, File}, io::{BufWriter, Write}, path::{Path, PathBuf}, sync::{Mutex, OnceLock}};
+use tokio::{fs as tfs, io::copy_buf};
+use tokio_util::io::StreamReader;
+use std::{fs, io::{Error, ErrorKind}, path::{Path, PathBuf}, sync::{Mutex, OnceLock}};
 use anyhow::{anyhow, Context};
 use filetime::{set_file_mtime, FileTime};
-use futures_util::StreamExt;
+use futures::TryStreamExt;
 use of_client::{content, httpdate::parse_http_date, media::{Media, MediaType}, reqwest::{header, IntoUrl, StatusCode, Url}, user::User, OFClient};
 use winrt_toast::{register, Toast, ToastManager};
 
@@ -22,7 +24,7 @@ pub async fn get_avatar(user: &User, client: &OFClient) -> anyhow::Result<Option
 	
 			let user_path = Path::new("data").join(&user.username);
 			fetch_file(client, avatar, &user_path.join("Profile").join("Avatars"), Some(&filename)).await
-			.map(|(_, path)| Some(path))
+			.map(Some)
 		},
 		None => Ok(None)
 	}
@@ -38,13 +40,13 @@ pub async fn get_thumbnail<T: content::HasMedia>(content: &T, client: &OFClient,
 	match thumb {
 		Some(thumb) => {	
 			fetch_file(client, thumb, temp_dir, None).await
-			.map(|(_, path)| Some(path))
+			.map(Some)
 		},
 		None => Ok(None)
 	}
 }
 
-pub async fn fetch_file<U: IntoUrl>(client: &OFClient, link: U, path: &Path, filename: Option<&str>) -> anyhow::Result<(bool, PathBuf)> {
+pub async fn fetch_file<U: IntoUrl>(client: &OFClient, link: U, path: &Path, filename: Option<&str>) -> anyhow::Result<PathBuf> {
 	let url = link.into_url()?;
 	let filename = filename
 		.or_else(|| {
@@ -58,34 +60,27 @@ pub async fn fetch_file<U: IntoUrl>(client: &OFClient, link: U, path: &Path, fil
 	let final_path = path.join(filename);
 	if !final_path.exists() { fs::create_dir_all(path)?; }
 
-	let file_modify_date = final_path.metadata().and_then(|metadata| metadata.modified());
-
-	let response = {
-		if let Ok(date) = file_modify_date {
+	let response = match final_path.metadata().and_then(|metadata| metadata.modified()) {
+		Ok(date) => {
 			let resp = client.get_if_modified_since(url, date).await?;
 			match resp.status() {
-				StatusCode::NOT_MODIFIED => return Ok((true, final_path)),
+				StatusCode::NOT_MODIFIED => return Ok(final_path),
 				_ => resp
 			}
-		} else { client.get(url).await? }
+		},
+		Err(_) => client.get(url).await?
 	};
 
 	let last_modified_header = response.headers().get(header::LAST_MODIFIED).cloned();
 
-	let temp_path = final_path.with_extension("temp");
-	let mut writer = File::create(&temp_path)
-		.map(BufWriter::new)
-		.context(format!("Creating file at {:?}", temp_path))?;
+	let mut file = tfs::File::from_std(fs::File::create(&final_path)?);
+	let mut reader = StreamReader::new(
+		response
+		.bytes_stream()
+		.map_err(|e| Error::new(ErrorKind::Other, e))
+	);
 
-	let mut stream = response.bytes_stream();
-	while let Some(item) = stream.next().await {
-		let chunk = item.context("Downloading file chunk")?;
-		writer.write_all(&chunk).context("Writing file chunk")?;
-	}
-	writer.flush()?;
-
-	fs::rename(&temp_path, &final_path)
-	.context(format!("Renaming {:?} to {:?}", temp_path.file_name(), final_path.file_name()))?;
+	copy_buf(&mut reader, &mut file).await?;
 
 	if let Some(modified) = last_modified_header {
 		if let Some(date) = modified.to_str().ok().and_then(|s| parse_http_date(s).ok()) {
@@ -94,7 +89,7 @@ pub async fn fetch_file<U: IntoUrl>(client: &OFClient, link: U, path: &Path, fil
 		}
 	}
 
-	Ok((final_path.exists(), final_path))
+	Ok(final_path)
 }
 
 pub fn show_notification(toast: &Toast) -> winrt_toast::Result<()> {

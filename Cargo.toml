@@ -40,6 +40,7 @@ winit = "0.30.8"
 tray-icon = "0.19.2"
 winrt-toast = "0.1.1"
 
+tokio-util = { version = "0.7.13", features = ["io"] }
 tokio = { workspace = true, features = ["rt-multi-thread", "macros"] }
 reqwest = { workspace = true, features = ["stream"] }
 futures-util = { workspace = true }
