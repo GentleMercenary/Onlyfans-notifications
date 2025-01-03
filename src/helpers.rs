@@ -1,30 +1,45 @@
 use log::*;
 use tokio::{fs as tfs, io::copy_buf};
 use tokio_util::io::StreamReader;
-use std::{fs, io::{Error, ErrorKind}, path::{Path, PathBuf}, sync::{Mutex, OnceLock}};
+use std::{fs, future::Future, io::{Error, ErrorKind}, path::{Path, PathBuf}, sync::{Mutex, OnceLock}, time::SystemTime};
 use anyhow::{anyhow, Context};
 use filetime::{set_file_mtime, FileTime};
 use futures::TryStreamExt;
 use of_client::{content, httpdate::parse_http_date, media::{Media, MediaType}, reqwest::{header, IntoUrl, StatusCode, Url}, user::User, OFClient};
 use winrt_toast::{register, Toast, ToastManager};
 
+pub fn filename_from_url(url: &Url) -> Option<&str> {
+	url
+	.path_segments()
+	.and_then(Iterator::last)
+	.and_then(|name| (!name.is_empty()).then_some(name))
+}
+
 pub async fn get_avatar(user: &User, client: &OFClient) -> anyhow::Result<Option<PathBuf>> {
 	match &user.avatar {
 		Some(avatar) => {
-			let filename = Url::parse(avatar)?
+			let avatar_url = Url::parse(avatar)?;
+			let (filename, ext) = avatar_url
 				.path_segments()
 				.and_then(|segments| {
 					let mut reverse_iter = segments.rev();
 					let ext = reverse_iter.next().and_then(|file| file.split('.').last());
 					let filename = reverse_iter.next();
 		
-					Option::zip(filename, ext).map(|(filename, ext)| [filename, ext].join("."))
+					Option::zip(filename, ext)
 				})
 				.ok_or_else(|| anyhow!("Filename unknown"))?;
 	
-			let user_path = Path::new("data").join(&user.username);
-			fetch_file(client, avatar, &user_path.join("Profile").join("Avatars"), Some(&filename)).await
-			.map(Some)
+			let path = Path::new("data")
+				.join(&user.username)
+				.join("Profile")
+				.join("Avatars")
+				.join(filename)
+				.with_extension(ext);
+
+			fetch_file(client, avatar, &path).await?;
+			Ok(Some(path))
+			
 		},
 		None => Ok(None)
 	}
@@ -38,58 +53,69 @@ pub async fn get_thumbnail<T: content::HasMedia>(content: &T, client: &OFClient,
 	.find_map(|media| media.thumbnail().filter(|s| !s.is_empty()));
 
 	match thumb {
-		Some(thumb) => {	
-			fetch_file(client, thumb, temp_dir, None).await
-			.map(Some)
+		Some(thumb) => {
+			let thumbnail_url = Url::parse(thumb)?;
+			let filename = filename_from_url(&thumbnail_url)
+				.ok_or_else(|| anyhow!("Filename unknown"))?;
+
+			let path = temp_dir.join(filename);
+			fetch_file(client, thumb, &path).await?;
+			Ok(Some(path))
 		},
 		None => Ok(None)
 	}
 }
 
-pub async fn fetch_file<U: IntoUrl>(client: &OFClient, link: U, path: &Path, filename: Option<&str>) -> anyhow::Result<PathBuf> {
+pub async fn handle_download<'a, F, Fut>(path: &'a Path, modified: Option<SystemTime>, fetch_fn: F) -> anyhow::Result<()>
+where
+	F: FnOnce() -> Fut,
+	Fut: Future<Output = anyhow::Result<()>> + 'a,
+{
+	if let Some(parent) = path.parent() { fs::create_dir_all(parent)?; }
+
+	fetch_fn().await
+	.inspect_err(|err| error!("Downloading {:?} failed: {err}", path.file_name().unwrap()))?;
+
+	if let Some(date) = modified {
+		set_file_mtime(path, FileTime::from_system_time(date))
+		.context("Setting file modified date")?;
+	}
+
+	Ok(())
+}
+
+pub async fn fetch_file<U: IntoUrl>(client: &OFClient, link: U, path: &Path) -> anyhow::Result<()> {
 	let url = link.into_url()?;
-	let filename = filename
-		.or_else(|| {
-			url
-			.path_segments()
-			.and_then(Iterator::last)
-			.and_then(|name| (!name.is_empty()).then_some(name))
-		})
-		.ok_or_else(|| anyhow!("Filename unknown"))?;
 
-	let final_path = path.join(filename);
-	if !final_path.exists() { fs::create_dir_all(path)?; }
-
-	let response = match final_path.metadata().and_then(|metadata| metadata.modified()) {
+	let response = match path.metadata().and_then(|metadata| metadata.modified()) {
 		Ok(date) => {
-			let resp = client.get_if_modified_since(url, date).await?;
-			match resp.status() {
-				StatusCode::NOT_MODIFIED => return Ok(final_path),
-				_ => resp
-			}
+			let response = client.get_if_modified_since(url, date).await?;
+			if response.status() == StatusCode::NOT_MODIFIED { return Ok(()) }
+			response
 		},
 		Err(_) => client.get(url).await?
 	};
 
-	let last_modified_header = response.headers().get(header::LAST_MODIFIED).cloned();
+	let modified = response
+		.headers()
+		.get(header::LAST_MODIFIED)
+		.and_then(|header| header.to_str().ok())
+		.and_then(|s| parse_http_date(s).ok());
 
-	let mut file = tfs::File::from_std(fs::File::create(&final_path)?);
-	let mut reader = StreamReader::new(
-		response
-		.bytes_stream()
-		.map_err(|e| Error::new(ErrorKind::Other, e))
-	);
-
-	copy_buf(&mut reader, &mut file).await?;
-
-	if let Some(modified) = last_modified_header {
-		if let Some(date) = modified.to_str().ok().and_then(|s| parse_http_date(s).ok()) {
-			set_file_mtime(&final_path, FileTime::from_system_time(date))
-			.context("Setting file modified date")?;
-		}
-	}
-
-	Ok(final_path)
+	handle_download(path, modified, || async move {
+		let temp_path = path.with_extension("temp");
+		let mut file = tfs::File::from_std(fs::File::create(&temp_path)?);
+		let mut reader = StreamReader::new(
+			response
+			.bytes_stream()
+			.map_err(|e| Error::new(ErrorKind::Other, e))
+		);
+	
+		copy_buf(&mut reader, &mut file).await?;
+	
+		fs::rename(&temp_path, path).map_err(Into::into)
+	}).await
+	.inspect_err(|err| error!("Download failed: {err}"))
 }
 
 pub fn show_notification(toast: &Toast) -> winrt_toast::Result<()> {

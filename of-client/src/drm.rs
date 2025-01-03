@@ -121,16 +121,21 @@ impl OFClient {
 
 	pub fn mpd_header(&self, manifest_url: &str) -> String {
 		let url = Url::parse(manifest_url).unwrap();
-		let mut cookie = String::new();
+
+		let mut header_str = String::new();
+		header_str.push_str("Cookie: ");
+		
 		let headers = self.headers.read().unwrap();
 
 		for (name, val) in headers.cookie.read().unwrap().get_request_values(&url) {
-			cookie.push_str(name);
-			cookie.push('=');
-			cookie.push_str(val);
-			cookie.push(';');
+			header_str.push_str(name);
+			header_str.push('=');
+			header_str.push_str(val);
+			header_str.push(';');
 		}
 
-		format!("Cookie:{cookie} User-Agent: {}", headers.user_agent)
+		header_str.push_str("User-Agent: ");
+		header_str.push_str(&headers.user_agent);
+		header_str
 	}
 }

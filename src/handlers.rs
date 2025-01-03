@@ -1,11 +1,11 @@
-use crate::{helpers::{fetch_file, get_avatar, get_thumbnail, show_notification}, settings::Settings};
+use crate::{helpers::{handle_download, fetch_file, filename_from_url, get_avatar, get_thumbnail, show_notification}, settings::Settings};
 
 use log::*;
-use tokio::task::JoinHandle;
-use std::{io, path::Path, sync::{Arc, RwLock}};
-use anyhow::bail;
+use reqwest::Url;
+use tokio::{process as tProcess, task::JoinHandle};
+use std::{io, path::Path, process, sync::{Arc, RwLock}};
+use anyhow::{bail, anyhow};
 use ffmpeg_sidecar::command::FfmpegCommand;
-use filetime::{set_file_mtime, FileTime};
 use tempfile::TempDir;
 use futures::{future::{join3, join_all, try_join}, FutureExt};
 use nanohtml2text::html2text;
@@ -171,45 +171,67 @@ impl Context {
 	}
 	
 	async fn download_media_drm(&self, media: &DRM, license_url: &str, path: &Path) -> anyhow::Result<()> {
-		let MPDData { base_url: fname, pssh, last_modified } = self.client.get_mpd_data(media).await
-			.inspect_err(|e| error!("{e}"))?;
+		let MPDData { base_url: fname, pssh, last_modified } = self.client
+			.get_mpd_data(media)
+			.await
+			.inspect_err(|err| error!("{err}"))?;
+
+		let path = &path.join(fname);
+
+		if  let Some(remote_modified) = last_modified &&
+			let Ok(local_modified) = path.metadata().and_then(|metadata| metadata.modified()) &&
+			local_modified >= remote_modified
+		{
+			return Ok(())
+		}
+
+		handle_download(path, last_modified, || async move {
+			let key = self.client
+				.get_decryption_key(self.device.as_ref().unwrap(), license_url, pssh)
+				.await
+				.inspect_err(|err| error!("{err}"))?;
+			
+			let manifest = &media.manifest.dash;
+
+			let mut command: tProcess::Command = {
+				let mut ffmpeg_command = FfmpegCommand::new();
+				ffmpeg_command
+				.hide_banner()
+				.create_no_window()
+				.args(["-loglevel", "error"])
+				.args(["-cenc_decryption_key", &base16::encode_lower(&key.key)])
+				.args(["-headers", &self.client.mpd_header(manifest)])
+				.overwrite()
+				.input(manifest)
+				.args(["-c", "copy"])
+				.as_inner_mut()
+				.arg(path);
 	
-		let key = self.client.get_decryption_key(self.device.as_ref().unwrap(), license_url, pssh).await
-			.inspect_err(|e| error!("{e}"))?;
-	
-		let _ = tokio::task::spawn_blocking({
-			let manifest = media.manifest.dash.clone();
-			let mpd_header = self.client.mpd_header(&manifest);
-			let out_path = path.join(fname);
-			move || {
-				let result = FfmpegCommand::new()
-					.hide_banner()
-					.create_no_window()
-					.args(["-cenc_decryption_key", &base16::encode_lower(&key.key)])
-					.args(["-headers", &mpd_header])
-					.overwrite()
-					.input(&manifest)
-					.args(["-c", "copy"])
-					.output(out_path.to_string_lossy())
-					.spawn()
-					.and_then(|mut command| command.wait())
-					.inspect_err(|e| warn!("FFmpeg command failed: ${e}"));
-				
-				if let Ok(_) = result && let Some(time) = last_modified {
-					let _ = set_file_mtime(&out_path, FileTime::from_system_time(time))
-					.inspect_err(|e| warn!("Error setting file modified date: ${e}"));
-				}
+				let std_command: process::Command = ffmpeg_command.into();
+				std_command.into()
+			};
+
+			let output = command
+				.output()
+				.await?;
+
+			if !output.stderr.is_empty() {
+				bail!(String::from_utf8_lossy(&output.stderr).to_string())
 			}
-		}).await;
-	
-		Ok(())
+
+			Ok(())
+		})
+		.await
 	}
 	
 	async fn download_media(&self, media: &Feed, path: &Path) -> anyhow::Result<()> {
 		if let Some(url) = media.source() {
-			let _ = fetch_file(&self.client, url, path, None)
-				.await
-				.inspect_err(|err| error!("Download failed: {err}"));
+			let url = Url::parse(url)?;
+			let filename = filename_from_url(&url)
+				.ok_or_else(|| anyhow!("Filename unknown"))?;
+
+			let path = path.join(filename);
+			let _ = fetch_file(&self.client, url, &path).await;
 		}
 	
 		Ok(())
