@@ -53,8 +53,8 @@ impl WebSocketClient {
 impl WebSocketClient<Disconnected> {
 	pub async fn connect<'a>(self, url: &str, token: &str) -> Result<WebSocketClient<Connected<'a>>, SocketError> {
 		info!("Creating websocket");
-		let (socket, resp) = connect_async(url).await?;
-		info!("Websocket created: {:#?}", resp);
+		let (socket, _) = connect_async(url).await?;
+		info!("Websocket created");
 
 		let (mut sink, stream) = socket.split();
 
