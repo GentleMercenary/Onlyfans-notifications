@@ -3,9 +3,9 @@ use crate::{helpers::{handle_download, fetch_file, filename_from_url, get_avatar
 use log::*;
 use reqwest::Url;
 use tokio::{process as tProcess, task::JoinHandle};
-use std::{io, path::Path, process, sync::{Arc, RwLock}};
+use std::{io, iter::from_fn, path::Path, process, sync::{Arc, RwLock}};
 use anyhow::{bail, anyhow};
-use ffmpeg_sidecar::command::FfmpegCommand;
+use ffmpeg_sidecar::{command::FfmpegCommand, event::{FfmpegEvent, LogLevel}, log_parser::FfmpegLogParser};
 use tempfile::TempDir;
 use futures::{future::{join3, join_all, try_join}, FutureExt};
 use nanohtml2text::html2text;
@@ -188,8 +188,7 @@ impl Context {
 		handle_download(path, last_modified, || async move {
 			let key = self.client
 				.get_decryption_key(self.device.as_ref().unwrap(), license_url, pssh)
-				.await
-				.inspect_err(|err| error!("{err}"))?;
+				.await?;
 			
 			let manifest = &media.manifest.dash;
 
@@ -197,8 +196,6 @@ impl Context {
 				let mut ffmpeg_command = FfmpegCommand::new();
 				ffmpeg_command
 				.hide_banner()
-				.create_no_window()
-				.args(["-loglevel", "error"])
 				.args(["-cenc_decryption_key", &base16::encode_lower(&key.key)])
 				.args(["-headers", &self.client.mpd_header(manifest)])
 				.overwrite()
@@ -212,11 +209,19 @@ impl Context {
 			};
 
 			let output = command
-				.output()
+				.spawn()?
+				.wait_with_output()
 				.await?;
 
-			if !output.stderr.is_empty() {
-				bail!(String::from_utf8_lossy(&output.stderr).to_string())
+			let mut log_parser = FfmpegLogParser::new(output.stderr.as_slice());
+			let first_error = from_fn(|| match log_parser.parse_next_event() {
+					Ok(entry) if !matches!(entry, FfmpegEvent::LogEOF) => Some(entry),
+					_ => None,
+				})
+				.find(|entry| matches!(entry, FfmpegEvent::Log(LogLevel::Error, _)));
+
+			if let Some(FfmpegEvent::Log(_, error)) = first_error {
+				bail!(error)
 			}
 
 			Ok(())
