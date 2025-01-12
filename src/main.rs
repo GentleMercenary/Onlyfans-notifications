@@ -265,7 +265,12 @@ impl ApplicationHandler<Events> for App {
 				} else if id == menu_items.reload_auth.id() {
 					info!("Reloading authentication parameters");
 					if let Ok(new_auth) = get_auth_params() {
-						*self.client_params.write().unwrap() = new_auth.into();
+						let mut params_lock = self.client_params.write().unwrap();
+						params_lock.x_bc = new_auth.x_bc;
+						params_lock.user_id = new_auth.user_id;
+						params_lock.user_agent = new_auth.user_agent;
+						*params_lock.cookie.write().unwrap() = new_auth.cookie;
+
 						info!("Successfully updated authentication parameters");
 					}
 				}
