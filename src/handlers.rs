@@ -102,7 +102,7 @@ impl Context {
 	}
 
 	async fn notify<T: ToToast + content::Content>(&self, content: &T, user: &User) -> anyhow::Result<()> {
-		if !(self.settings.read().unwrap().notify.enabled_for(&user.name, T::content_type())) { return Ok(()); }
+		if !(self.settings.read().unwrap().notify.enabled_for(&user.username, T::content_type())) { return Ok(()); }
 
 		let mut toast = content.setup_notification(user);
 		let avatar = get_avatar(user, &self.client).await?;
@@ -120,7 +120,7 @@ impl Context {
 	}
 
 	async fn notify_with_thumbnail<T: ToToast + content::HasMedia>(&self, content: &T, user: &User) -> anyhow::Result<()> {
-		if !(self.settings.read().unwrap().notify.enabled_for(&user.name, T::content_type())) { return Ok(()); }
+		if !(self.settings.read().unwrap().notify.enabled_for(&user.username, T::content_type())) { return Ok(()); }
 
 		let mut toast = content.setup_notification(user);
 		let (avatar, thumbnail) = try_join(get_avatar(user, &self.client), get_thumbnail(content, &self.client, self.thumbnail_dir.path())).await?;
@@ -142,7 +142,7 @@ impl Context {
 	}
 	
 	async fn download<T: content::HasMedia<Media = Feed>>(&self, content: &T, user: &User) {
-		if !(self.settings.read().unwrap().download.enabled_for(&user.name, T::content_type())) { return; }
+		if !(self.settings.read().unwrap().download.enabled_for(&user.username, T::content_type())) { return; }
 
 		let header = T::content_type().to_string();
 		let content_path = Path::new("data").join(&user.username).join(&header);
@@ -243,7 +243,7 @@ impl Context {
 	}
 	
 	async fn like<T: content::CanLike>(&self, content: &T, user: &User) {
-		if !(self.settings.read().unwrap().like.enabled_for(&user.name, T::content_type())) { return; }
+		if !(self.settings.read().unwrap().like.enabled_for(&user.username, T::content_type())) { return; }
 		let _ = self.client.post(content.like_url(), None::<&[u8]>).await;
 	}
 	
