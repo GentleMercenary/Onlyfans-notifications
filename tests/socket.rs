@@ -2,17 +2,16 @@ mod init;
 
 use of_notifier::{handlers::{Handler, Context}, init_cdm, init_client, settings::Settings};
 use of_daemon::structs::{Message, TaggedMessage};
-use std::{sync::{Once, OnceLock, Arc, RwLock}, thread::sleep, time::Duration};
+use std::{sync::{OnceLock, Arc, RwLock}, thread::sleep, time::Duration};
 use init::init_log;
 
-static INIT: Once = Once::new();
 static HANDLER: OnceLock<Context> = OnceLock::new();
 
 macro_rules! socket_test {
 	($name: ident, $incoming: expr, $match: pat) => {
 		#[tokio::test]
 		async fn $name() {
-			INIT.call_once(|| { init_log(); });
+			init_log();
 
 			let msg = serde_json::from_str::<Message>($incoming).unwrap();
 			assert!(matches!(msg, $match));
@@ -26,7 +25,7 @@ macro_rules! socket_test {
 
 			if let Some(handle) = msg.handle(context).unwrap() {
 				let _ = handle.await;
-				sleep(Duration::from_millis(10));
+				sleep(Duration::from_millis(100));
 			}
 		}
 	};

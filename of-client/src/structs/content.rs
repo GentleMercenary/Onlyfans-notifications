@@ -1,7 +1,8 @@
 #![allow(dead_code)]
+#![allow(async_fn_in_trait)]
 
 use deserializers::from_str;
-use crate::{OFClient, media, user::User};
+use crate::{media, user::User, OFClient};
 use std::{slice, fmt};
 use futures_util::TryFutureExt;
 use reqwest::IntoUrl;
@@ -173,9 +174,10 @@ impl HasMedia for Stream {
 }
 
 impl OFClient {
-	pub async fn get_post(&self, post_id: u64) -> reqwest::Result<Post> {
+	pub async fn get_post(&self, post_id: u64) -> reqwest_middleware::Result<Post> {
 		self.get(format!("https://onlyfans.com/api2/v2/posts/{post_id}"))
-		.and_then(|response| response.json::<Post>())
+		.send()
+		.and_then(|response| response.json::<Post>().map_err(Into::into))
 		.await
 		.inspect(|content| info!("Got content: {:?}", content))
 		.inspect_err(|err| error!("Error reading content {post_id}: {err:?}"))

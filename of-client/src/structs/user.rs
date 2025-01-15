@@ -1,3 +1,5 @@
+#![allow(async_fn_in_trait)]
+
 use crate::OFClient;
 use std::fmt;
 use serde::Deserialize;
@@ -46,31 +48,35 @@ impl IDType for &str {}
 impl IDType for u64 {}
 
 impl OFClient {
-	pub async fn get_user<I: IDType>(&self, user_id: I) -> reqwest::Result<User> {
+	pub async fn get_user<I: IDType>(&self, user_id: I) -> reqwest_middleware::Result<User> {
 		self.get(format!("https://onlyfans.com/api2/v2/users/{user_id}"))
+		.send()
 		.and_then(|response| response.json::<User>().map_err(Into::into))
 		.await
 		.inspect(|user| info!("Got user: {:?}", user))
 		.inspect_err(|err| error!("Error reading user {user_id}: {err:?}"))
 	}
 
-	pub async fn subscribe<I: IDType>(&self, user_id: I) -> reqwest::Result<User> {
-		self.post(format!("https://onlyfans.com/api2/v2/users/{user_id}/subscribe"), None::<&[u8]>)
-		.and_then(|response| response.json::<User>())
+	pub async fn subscribe<I: IDType>(&self, user_id: I) -> reqwest_middleware::Result<User> {
+		self.post(format!("https://onlyfans.com/api2/v2/users/{user_id}/subscribe"))
+		.send()
+		.and_then(|response| response.json::<User>().map_err(Into::into))
 		.await
 		.inspect(|user| info!("Got user: {:?}", user))
 		.inspect_err(|err| error!("Error reading user {user_id}: {err:?}"))
 	}
 
-	pub async fn get_subscriptions(&self) -> reqwest::Result<Vec<User>> {
+	pub async fn get_subscriptions(&self) -> reqwest_middleware::Result<Vec<User>> {
 		let count = self.get("https://onlyfans.com/api2/v2/subscriptions/count/all")
-		.and_then(|response| response.json::<Subscriptions>())
+		.send()
+		.and_then(|response| response.json::<Subscriptions>().map_err(Into::into))
 		.await
 		.inspect_err(|err| error!("Error reading subscribe counts: {err:?}"))
 		.map(|counts| counts.subscriptions.all)?;
 
 		self.get(format!("https://onlyfans.com/api2/v2/subscriptions/subscribes?limit={count}&offset=0&type=all"))
-		.and_then(|response| response.json::<Vec<User>>())
+		.send()
+		.and_then(|response| response.json::<Vec<User>>().map_err(Into::into))
 		.await
 	}
 }

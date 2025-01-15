@@ -1,11 +1,13 @@
 use log::*;
+use reqwest::header::{HeaderValue, IF_MODIFIED_SINCE};
 use tokio::{fs as tfs, io::copy_buf};
 use tokio_util::io::StreamReader;
 use std::{fs, future::Future, io::{Error, ErrorKind}, path::{Path, PathBuf}, sync::{Mutex, OnceLock}, time::SystemTime};
 use anyhow::{anyhow, Context};
 use filetime::{set_file_mtime, FileTime};
 use futures::TryStreamExt;
-use of_client::{content, httpdate::parse_http_date, media::Thumbnail, reqwest::{header, IntoUrl, StatusCode, Url}, user::User, OFClient};
+use httpdate::{fmt_http_date, parse_http_date};
+use of_client::{content, media::Thumbnail, reqwest::{header, IntoUrl, StatusCode, Url}, user::User, OFClient};
 use winrt_toast::{register, Toast, ToastManager};
 
 pub fn filename_from_url(url: &Url) -> Option<&str> {
@@ -84,11 +86,15 @@ pub async fn fetch_file<U: IntoUrl>(client: &OFClient, link: U, path: &Path) -> 
 
 	let response = match path.metadata().and_then(|metadata| metadata.modified()) {
 		Ok(date) => {
-			let response = client.get_if_modified_since(url, date).await?;
+			let response = client.get(url)
+			.header(IF_MODIFIED_SINCE, HeaderValue::from_str(&fmt_http_date(date)).unwrap())
+			.send()
+			.await?;
+
 			if response.status() == StatusCode::NOT_MODIFIED { return Ok(()) }
 			response
 		},
-		Err(_) => client.get(url).await?
+		Err(_) => client.get(url).send().await?
 	};
 
 	let modified = response

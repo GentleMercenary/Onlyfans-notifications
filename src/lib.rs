@@ -120,8 +120,7 @@ pub fn get_auth_params() -> Result<AuthParams, AuthParseError> {
 pub fn init_client() -> anyhow::Result<OFClient> {
 	info!("Reading authentication parameters");
 	let auth_params = get_auth_params()?;
-	let client = OFClient::new(auth_params)?;
-	Ok(client)
+	OFClient::new(auth_params).map_err(Into::into)
 }
 
 pub fn init_cdm() -> anyhow::Result<Cdm> {

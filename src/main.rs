@@ -1,7 +1,7 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
 use log::*;
-use of_client::RequestHeaders;
+use of_client::SharedRequestHeaders;
 use of_notifier::{get_auth_params, handlers::{Context, Handler}, helpers::show_notification, init_cdm, init_client, settings::Settings, FileParseError};
 use of_daemon::{socket::SocketError, tungstenite::error::{Error as WSError, ProtocolError}, Daemon, DaemonError};
 use tray_icon::{menu::{Menu, MenuEvent, MenuItem}, Icon, MouseButton, MouseButtonState, TrayIcon, TrayIconBuilder, TrayIconEvent};
@@ -115,7 +115,7 @@ struct App {
 	tray: Option<Tray>,
 	event_loop: EventLoopProxy<Events>,
 	settings: Arc<RwLock<Settings>>,
-	client_params: Arc<RwLock<RequestHeaders>>,
+	client_params: Arc<SharedRequestHeaders>,
 	toggle_daemon: Arc<Notify>,
 }
 

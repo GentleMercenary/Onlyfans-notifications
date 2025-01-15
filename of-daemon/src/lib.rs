@@ -9,7 +9,7 @@ pub mod tungstenite { pub use tokio_tungstenite::tungstenite::error; }
 use std::{sync::Arc, time::Duration};
 use chrono::Utc;
 use futures::{StreamExt, TryFutureExt};
-use of_client::{OFClient, reqwest, user};
+use of_client::{OFClient, reqwest_middleware, user};
 use rand::{rngs::StdRng, Rng, SeedableRng};
 use rand_distr::{Distribution, Exp1, Standard};
 use serde::Serialize;
@@ -23,7 +23,7 @@ pub enum DaemonError {
 	#[error("{0}")]
 	Socket(#[from] SocketError),
 	#[error("{0}")]
-	Request(#[from] reqwest::Error)
+	Request(#[from] reqwest_middleware::Error)
 }
 
 pub struct Daemon {
@@ -114,7 +114,8 @@ impl Daemon {
 async fn connect<'a>(client: &OFClient) -> Result<WebSocketClient<Connected<'a>>, DaemonError> {
 	info!("Fetching user data");
 	let me = client.get("https://onlyfans.com/api2/v2/users/me")
-		.and_then(|response| response.json::<user::Me>())
+		.send()
+		.and_then(|response| response.json::<user::Me>().map_err(Into::into))
 		.inspect_err(|err| error!("Error fetching user data: {err}"))
 		.await?;
 	
@@ -166,6 +167,9 @@ async fn simulate_activity(client: &OFClient) {
 		sleep(intervals.next().unwrap()).await;
 		let click = rand::random::<ClickStats>();
 		trace!("Simulating site activity: {}", serde_json::to_string(&click).unwrap());
-		let _ = client.post_json("https://onlyfans.com/api2/v2/users/clicks-stats", &click).await;
+		let _ = client.post("https://onlyfans.com/api2/v2/users/clicks-stats")
+			.json(&click)
+			.send()
+			.await;
 	}
 }

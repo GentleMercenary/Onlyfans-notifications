@@ -14,10 +14,15 @@ use std::{io, iter::from_fn, path::Path, process, sync::{Arc, RwLock}};
 use anyhow::{bail, anyhow};
 use ffmpeg_sidecar::{command::FfmpegCommand, event::{FfmpegEvent, LogLevel}, log_parser::FfmpegLogParser};
 use tempfile::TempDir;
-use futures::{future::{join3, join_all, try_join, OptionFuture}, FutureExt};
+use futures::future::{join3, join_all, try_join, OptionFuture};
 use nanohtml2text::html2text;
 use of_daemon::structs::{self, Message, TaggedMessage};
-use of_client::{content::{self, CanLike, ContentType, HasMedia}, drm::MPDData, media::{Feed, Media, MediaType, Thumbnail, DRM}, user::User, widevine::Cdm, OFClient};
+use of_client::{
+	content::{self, ContentType, Content, HasMedia, CanLike}, 
+	media::{Feed, Media, MediaType, Thumbnail, DRM},
+	drm::MPDData, user::User, widevine::Cdm, OFClient
+};
+
 use winrt_toast::{content::{image::{ImageHintCrop, ImagePlacement}, text::TextPlacement}, Header, Image, Text, Toast};
 
 #[derive(Clone)]
@@ -52,7 +57,7 @@ impl Context {
 		Ok(())
 	}
 
-	async fn notify_with_thumbnail<T: content::Content + content::HasMedia + ToToast>(&self, content: &T, user: &User) -> anyhow::Result<()> {
+	async fn notify_with_thumbnail<T: Content + HasMedia + ToToast>(&self, content: &T, user: &User) -> anyhow::Result<()> {
 		let mut toast = content.setup_notification(user);
 		let (avatar, thumbnail) = try_join(get_avatar(user, &self.client), get_thumbnail(content, &self.client, self.thumbnail_dir.path())).await?;
 
@@ -72,7 +77,7 @@ impl Context {
 		Ok(())
 	}
 	
-	async fn download<T: content::Content + content::HasMedia<Media = Feed>>(&self, content: &T, user: &User) {
+	async fn download<T: Content + HasMedia<Media = Feed>>(&self, content: &T, user: &User) {
 		let header = T::content_type().to_string();
 		let content_path = Path::new("data").join(&user.username).join(&header);
 	
@@ -171,8 +176,8 @@ impl Context {
 		Ok(())
 	}
 	
-	async fn like<T: content::CanLike>(&self, content: &T) {
-		let _ = self.client.post(content.like_url(), None::<&[u8]>).await;
+	async fn like<T: CanLike>(&self, content: &T) {
+		let _ = self.client.post(content.like_url()).send().await;
 	}
 }
 
@@ -280,7 +285,8 @@ impl Handler for structs::Notification {
 			.then(|| tokio::spawn({
 				let context = context.clone();
 				async move { let _ = context.notify(&self.content, &self.user).await; }
-			})))
+			}))
+		)
 	}
 }
 
@@ -303,7 +309,8 @@ impl Handler for structs::Stream {
 			.then(|| tokio::spawn({
 				let context = context.clone();
 				async move { let _ = context.notify_with_thumbnail(&self.content, &self.user).await; }
-			})))
+			}))
+		)
 	}
 }
 
@@ -323,11 +330,11 @@ impl Handler for structs::PostPublished {
 						));
 
 					join3(
-						Into::<OptionFuture<_>>::into(actions.notify
-						.then(|| context.notify_with_thumbnail(&content, &content.author).map(|_| ()))),
-						Into::<OptionFuture<_>>::into(actions.download
+						<OptionFuture<_>>::from(actions.notify
+						.then(|| context.notify_with_thumbnail(&content, &content.author))),
+						<OptionFuture<_>>::from(actions.download
 						.then(|| context.download(&content, &content.author))),
-						Into::<OptionFuture<_>>::into(actions.like
+						<OptionFuture<_>>::from(actions.like
 						.then(|| context.like(&content))),
 					).await;
 				}
@@ -351,11 +358,11 @@ impl Handler for structs::Chat {
 			let context = context.clone();
 			async move {
 				join3(
-					Into::<OptionFuture<_>>::into(actions.notify
-					.then(|| context.notify_with_thumbnail(&self.content, &self.from_user).map(|_| ()))),
-					Into::<OptionFuture<_>>::into(actions.download
+					<OptionFuture<_>>::from(actions.notify
+					.then(|| context.notify_with_thumbnail(&self.content, &self.from_user))),
+					<OptionFuture<_>>::from(actions.download
 					.then(|| context.download(&self.content, &self.from_user))),
-					Into::<OptionFuture<_>>::into(actions.like
+					<OptionFuture<_>>::from(actions.like
 					.then(|| context.like(&self.content))),
 				).await;
 			}
@@ -397,11 +404,11 @@ impl Handler for Vec<structs::Story> {
 							.resolve((&story.content, &author));
 
 						join3(
-							Into::<OptionFuture<_>>::into(actions.notify
-							.then(|| context.notify_with_thumbnail(&story.content, &author).map(|_| ()))),
-							Into::<OptionFuture<_>>::into(actions.download
+							<OptionFuture<_>>::from(actions.notify
+							.then(|| context.notify_with_thumbnail(&story.content, &author))),
+							<OptionFuture<_>>::from(actions.download
 							.then(|| context.download(&story.content, &author))),
-							Into::<OptionFuture<_>>::into(actions.like
+							<OptionFuture<_>>::from(actions.like
 							.then(|| context.like(&story.content))),
 						).await;
 					}
