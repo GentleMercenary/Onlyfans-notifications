@@ -1,6 +1,6 @@
 mod init;
 
-use of_notifier::{handlers::Context, init_cdm, init_client, settings::{CoarseSelection, Selection, Settings}};
+use of_notifier::{handlers::{Handler, Context}, init_cdm, init_client, settings::Settings};
 use of_daemon::structs::{Message, TaggedMessage};
 use std::{sync::{Once, OnceLock, Arc, RwLock}, thread::sleep, time::Duration};
 use init::init_log;
@@ -18,18 +18,13 @@ macro_rules! socket_test {
 			assert!(matches!(msg, $match));
 	
 			let context = HANDLER.get_or_init(|| {
-				let settings = Settings {
-					notify: Selection::Coarse(CoarseSelection::from(true)),
-					download: Selection::Coarse(CoarseSelection::from(false)),
-					..Settings::default()
-				};
-
+				let settings = Settings::default();
 				let client = init_client().unwrap();
 				let cdm = init_cdm().ok();
 				Context::new(client, cdm, Arc::new(RwLock::new(settings))).unwrap()
 			});
 
-			if let Some(handle) = context.spawn_handle(msg).unwrap() {
+			if let Some(handle) = msg.handle(context).unwrap() {
 				let _ = handle.await;
 				sleep(Duration::from_millis(10));
 			}

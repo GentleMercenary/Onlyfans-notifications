@@ -2,7 +2,7 @@
 
 use log::*;
 use of_client::RequestHeaders;
-use of_notifier::{get_auth_params, handlers::Context, helpers::show_notification, init_cdm, init_client, settings::Settings, FileParseError};
+use of_notifier::{get_auth_params, handlers::{Context, Handler}, helpers::show_notification, init_cdm, init_client, settings::Settings, FileParseError};
 use of_daemon::{socket::SocketError, tungstenite::error::{Error as WSError, ProtocolError}, Daemon, DaemonError};
 use tray_icon::{menu::{Menu, MenuEvent, MenuItem}, Icon, MouseButton, MouseButtonState, TrayIcon, TrayIconBuilder, TrayIconEvent};
 use winit::{application::ApplicationHandler, event, event_loop::{ActiveEventLoop, EventLoop, EventLoopProxy}, window::WindowId};
@@ -64,7 +64,7 @@ async fn main() -> anyhow::Result<()> {
 		})
 		.on_message({
 			let context = Context::new(client.clone(), cdm, settings.clone()).unwrap();
-			move |message| { let _ = context.spawn_handle(message); }
+			move |message| { let _ = message.handle(&context); }
 		})
 		.build(client);
 

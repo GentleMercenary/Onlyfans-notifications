@@ -1,4 +1,9 @@
-use crate::{helpers::{handle_download, fetch_file, filename_from_url, get_avatar, get_thumbnail, show_notification}, settings::Settings};
+use crate::{
+	helpers::{fetch_file, filename_from_url, get_avatar, get_thumbnail, handle_download, show_notification},
+	settings::{
+		markers::*, ContentActions, MediaContentActions, ResolveContentActions, Settings, StoryContentActions,
+		concrete::{ConcreteMediaSpecificSelection, ConcreteSelection, MediaSelection, Toggle}
+	}};
 
 use log::*;
 use reqwest::Url;
@@ -7,10 +12,10 @@ use std::{io, iter::from_fn, path::Path, process, sync::{Arc, RwLock}};
 use anyhow::{bail, anyhow};
 use ffmpeg_sidecar::{command::FfmpegCommand, event::{FfmpegEvent, LogLevel}, log_parser::FfmpegLogParser};
 use tempfile::TempDir;
-use futures::{future::{join3, join_all, try_join}, FutureExt};
+use futures::{future::{join3, join_all, try_join, OptionFuture}, FutureExt};
 use nanohtml2text::html2text;
-use of_daemon::structs::{Message, TaggedMessage};
-use of_client::{content::{self, ContentType}, drm::MPDData, media::{Feed, Media, MediaType, DRM}, user::User, widevine::Cdm, OFClient};
+use of_daemon::structs::{self, Message, TaggedMessage};
+use of_client::{content::{self, ContentType, HasMedia}, drm::MPDData, media::{Feed, Media, MediaType, Thumbnail, DRM}, user::User, widevine::Cdm, OFClient};
 use winrt_toast::{content::{image::{ImageHintCrop, ImagePlacement}, text::TextPlacement}, Header, Image, Text, Toast};
 
 #[derive(Clone)]
@@ -29,81 +34,7 @@ impl Context {
 		Ok(Self { client, device, settings, thumbnail_dir: Arc::new(thumbnail_dir) })
 	}
 
-	pub fn spawn_handle(&self, message: Message) -> anyhow::Result<Option<JoinHandle<()>>> {
-		match message {
-			Message::Error(msg) => {
-				error!("Error message received: {:?}", msg);
-				bail!("websocket received error message with code {}", msg.error)
-			},
-			Message::Notification(msg) => {
-				info!("Notification message received: {:?}", msg);
-				Ok(Some(tokio::spawn({
-					let context = self.clone();
-					async move { let _ = context.notify(&msg.content, &msg.user).await; }
-				})))
-			},
-			Message::Tagged(TaggedMessage::Stream(msg)) => {
-				info!("Stream message received: {:?}", msg);
-				Ok(Some(tokio::spawn({
-					let context = self.clone();
-					async move { let _ = context.notify_with_thumbnail(&msg.content, &msg.user).await; }
-				})))
-			},
-			Message::Tagged(TaggedMessage::PostPublished(msg)) => {
-				info!("Post message received: {:?}", msg);
-
-				Ok(Some(tokio::spawn({
-					let context = self.clone();
-					async move {
-						if let Ok(content) = context.client.get_post(msg.id).await {
-							join3(
-								context.notify_with_thumbnail(&content, &content.author).map(|_| ()),
-								context.download(&content, &content.author),
-								context.like(&content, &content.author)
-							).await;
-						}
-					}
-				})))
-			},
-			Message::Tagged(TaggedMessage::Api2ChatMessage(msg)) => {
-				info!("Chat message received: {:?}", msg);
-
-				Ok(Some(tokio::spawn({
-					let context = self.clone();
-					async move {
-						join3(
-							context.notify_with_thumbnail(&msg.content, &msg.from_user).map(|_| ()),
-							context.download(&msg.content, &msg.from_user),
-							context.like(&msg.content, &msg.from_user)
-						).await;
-					}
-				})))
-			},
-			Message::Tagged(TaggedMessage::Stories(msg)) => {
-				info!("Story message received: {:?}", msg);
-
-				Ok(Some(tokio::spawn({
-					let context = self.clone();
-					async move {
-						join_all(msg.iter().map(|story| async {
-							if let Ok(user) = context.client.get_user(story.user_id).await {
-								join3(
-									context.notify_with_thumbnail(&story.content, &user).map(|_| ()),
-									context.download(&story.content, &user),
-									context.like(&story.content, &user)
-								).await;
-							}
-						})).await;
-					}
-				})))
-			},
-			_ => Ok(None)
-		}
-	}
-
-	async fn notify<T: ToToast + content::Content>(&self, content: &T, user: &User) -> anyhow::Result<()> {
-		if !(self.settings.read().unwrap().notify.enabled_for(&user.username, T::content_type())) { return Ok(()); }
-
+	async fn notify<T: content::Content + ToToast>(&self, content: &T, user: &User) -> anyhow::Result<()> {
 		let mut toast = content.setup_notification(user);
 		let avatar = get_avatar(user, &self.client).await?;
 	
@@ -119,9 +50,7 @@ impl Context {
 		Ok(())
 	}
 
-	async fn notify_with_thumbnail<T: ToToast + content::HasMedia>(&self, content: &T, user: &User) -> anyhow::Result<()> {
-		if !(self.settings.read().unwrap().notify.enabled_for(&user.username, T::content_type())) { return Ok(()); }
-
+	async fn notify_with_thumbnail<T: content::Content + content::HasMedia + ToToast>(&self, content: &T, user: &User) -> anyhow::Result<()> {
 		let mut toast = content.setup_notification(user);
 		let (avatar, thumbnail) = try_join(get_avatar(user, &self.client), get_thumbnail(content, &self.client, self.thumbnail_dir.path())).await?;
 
@@ -141,9 +70,7 @@ impl Context {
 		Ok(())
 	}
 	
-	async fn download<T: content::HasMedia<Media = Feed>>(&self, content: &T, user: &User) {
-		if !(self.settings.read().unwrap().download.enabled_for(&user.username, T::content_type())) { return; }
-
+	async fn download<T: content::Content + content::HasMedia<Media = Feed>>(&self, content: &T, user: &User) {
 		let header = T::content_type().to_string();
 		let content_path = Path::new("data").join(&user.username).join(&header);
 	
@@ -242,11 +169,183 @@ impl Context {
 		Ok(())
 	}
 	
-	async fn like<T: content::CanLike>(&self, content: &T, user: &User) {
-		if !(self.settings.read().unwrap().like.enabled_for(&user.username, T::content_type())) { return; }
+	async fn like<T: content::CanLike>(&self, content: &T) {
 		let _ = self.client.post(content.like_url(), None::<&[u8]>).await;
 	}
-	
+}
+
+pub struct ResolvedContentActions {
+	pub notify: bool,
+	pub download: bool,
+	pub like: bool,
+}
+
+impl<T: HasMedia> ResolveContentActions<T> for MediaContentActions<ConcreteMediaSpecificSelection> {
+	type Resolved = ResolvedContentActions;
+	fn resolve(&self, data: &T) -> Self::Resolved {
+		let has_media = !data.media().is_empty();
+		let has_thumbnail = data.media().thumbnail().is_some();
+
+		let resolver = |concrete: &ConcreteSelection<ConcreteMediaSpecificSelection>| match concrete {
+			ConcreteSelection::Toggle(toggle) => **toggle,
+			ConcreteSelection::Specific(specific) => match specific.media {
+				MediaSelection::Any => has_media,
+				MediaSelection::Thumbnail => has_thumbnail,
+				MediaSelection::None => !has_media,
+			}
+		};
+
+		ResolvedContentActions {
+			notify: resolver(&self.notify),
+			download: resolver(&self.download),
+			like: resolver(&self.like)
+		}
+	}
+}
+
+impl ResolveContentActions<content::Story> for StoryContentActions {
+	type Resolved = ResolvedContentActions;
+	fn resolve(&self, _data: &content::Story) -> Self::Resolved {
+		ResolvedContentActions {
+			notify: *self.notify,
+			download: *self.download,
+			like: *self.like
+		}
+	}
+}
+
+impl<T> ResolveContentActions<T> for Toggle {
+	type Resolved = bool;
+	fn resolve(&self, _data: &T) -> Self::Resolved { **self }
+}
+
+pub trait Handler {
+	fn handle(self, context: &Context) -> anyhow::Result<Option<JoinHandle<()>>>;
+}
+
+impl Handler for Message {
+	fn handle(self, context: &Context) -> anyhow::Result<Option<JoinHandle<()>>> {
+		match self {
+			Message::Error(msg) => {
+				error!("Error message received: {:?}", msg);
+				bail!("websocket received error message with code {}", msg.error)
+			},
+			Message::Notification(msg) => {
+				info!("Notification message received: {:?}", msg);
+				msg.handle(context)
+			},
+			Message::Tagged(TaggedMessage::Stream(msg)) => {
+				info!("Stream message received: {:?}", msg);
+				msg.handle(context)
+			},
+			Message::Tagged(TaggedMessage::PostPublished(msg)) => {
+				info!("Post message received: {:?}", msg);
+				msg.handle(context)
+			},
+			Message::Tagged(TaggedMessage::Api2ChatMessage(msg)) => {
+				info!("Chat message received: {:?}", msg);
+				msg.handle(context)
+			},
+			Message::Tagged(TaggedMessage::Stories(msg)) => {
+				info!("Story message received: {:?}", msg);
+				msg.handle(context)
+			},
+			_ => Ok(None)
+		}
+	}
+}
+
+impl Handler for structs::Notification {
+	fn handle(self, context: &Context) -> anyhow::Result<Option<JoinHandle<()>>> {
+		Ok(
+			ContentActions::<NotificationMarker>::content_actions(&context.settings, &self.user.username)
+			.resolve(&self.content)
+			.then(|| tokio::spawn({
+				let context = context.clone();
+				async move { let _ = context.notify(&self.content, &self.user).await; }
+			})))
+	}
+}
+
+impl Handler for structs::Stream {
+	fn handle(self, context: &Context) -> anyhow::Result<Option<JoinHandle<()>>> {
+		Ok(
+			ContentActions::<StreamMarker>::content_actions(&context.settings, &self.user.username)
+			.resolve(&self.content)
+			.then(|| tokio::spawn({
+				let context = context.clone();
+				async move { let _ = context.notify_with_thumbnail(&self.content, &self.user).await; }
+			})))
+	}
+}
+
+impl Handler for structs::PostPublished {
+	fn handle(self, context: &Context) -> anyhow::Result<Option<JoinHandle<()>>> {
+		Ok(Some(tokio::spawn({
+			let context = context.clone();
+			async move {
+				if let Ok(content) = context.client.get_post(self.id).await {
+					let actions = ContentActions::<PostMarker>::content_actions(&context.settings, &content.author.username)
+						.resolve(&content);
+
+					join3(
+						Into::<OptionFuture<_>>::into(actions.notify
+						.then(|| context.notify_with_thumbnail(&content, &content.author).map(|_| ()))),
+						Into::<OptionFuture<_>>::into(actions.download
+						.then(|| context.download(&content, &content.author))),
+						Into::<OptionFuture<_>>::into(actions.like
+						.then(|| context.like(&content))),
+					).await;
+				}
+			}
+		})))
+	}
+}
+
+impl Handler for structs::Chat {
+	fn handle(self, context: &Context) -> anyhow::Result<Option<JoinHandle<()>>> {
+		let actions = ContentActions::<MessageMarker>::content_actions(&context.settings, &self.from_user.username)
+			.resolve(&self.content);
+
+		Ok(Some(tokio::spawn({
+			let context = context.clone();
+			async move {
+				join3(
+					Into::<OptionFuture<_>>::into(actions.notify
+					.then(|| context.notify_with_thumbnail(&self.content, &self.from_user).map(|_| ()))),
+					Into::<OptionFuture<_>>::into(actions.download
+					.then(|| context.download(&self.content, &self.from_user))),
+					Into::<OptionFuture<_>>::into(actions.like
+					.then(|| context.like(&self.content))),
+				).await;
+			}
+		})))
+	}
+}
+
+impl Handler for Vec<structs::Story> {
+	fn handle(self, context: &Context) -> anyhow::Result<Option<JoinHandle<()>>> {
+		Ok(Some(tokio::spawn({
+			let context = context.clone();
+			async move {
+				join_all(self.iter().map(|story| async {
+					if let Ok(author) = context.client.get_user(story.user_id).await {
+						let actions = ContentActions::<StoryMarker>::content_actions(&context.settings, &author.username)
+							.resolve(&story.content);
+
+						join3(
+							Into::<OptionFuture<_>>::into(actions.notify
+							.then(|| context.notify_with_thumbnail(&story.content, &author).map(|_| ()))),
+							Into::<OptionFuture<_>>::into(actions.download
+							.then(|| context.download(&story.content, &author))),
+							Into::<OptionFuture<_>>::into(actions.like
+							.then(|| context.like(&story.content))),
+						).await;
+					}
+				})).await;
+			}
+		})))
+	}
 }
 
 trait ToToast {

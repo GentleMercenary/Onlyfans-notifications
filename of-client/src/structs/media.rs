@@ -93,3 +93,16 @@ impl Media for Stream {
 	#[cfg(feature = "drm")]
 	fn drm(&self) -> Option<&DRM> { None }
 }
+
+pub trait Thumbnail {
+	fn thumbnail(&self) -> Option<&str>;
+}
+
+impl<T: Media> Thumbnail for &[T] {
+	fn thumbnail(&self) -> Option<&str> {
+		self
+		.iter()
+		.filter(|media| media.media_type() != &MediaType::Audio)
+		.find_map(|media| media.thumbnail().filter(|s| !s.is_empty()))
+	}
+}

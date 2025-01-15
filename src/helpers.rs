@@ -5,7 +5,7 @@ use std::{fs, future::Future, io::{Error, ErrorKind}, path::{Path, PathBuf}, syn
 use anyhow::{anyhow, Context};
 use filetime::{set_file_mtime, FileTime};
 use futures::TryStreamExt;
-use of_client::{content, httpdate::parse_http_date, media::{Media, MediaType}, reqwest::{header, IntoUrl, StatusCode, Url}, user::User, OFClient};
+use of_client::{content, httpdate::parse_http_date, media::Thumbnail, reqwest::{header, IntoUrl, StatusCode, Url}, user::User, OFClient};
 use winrt_toast::{register, Toast, ToastManager};
 
 pub fn filename_from_url(url: &Url) -> Option<&str> {
@@ -46,13 +46,8 @@ pub async fn get_avatar(user: &User, client: &OFClient) -> anyhow::Result<Option
 }
 
 pub async fn get_thumbnail<T: content::HasMedia>(content: &T, client: &OFClient, temp_dir: &Path) -> anyhow::Result<Option<PathBuf>> {
-	let thumb = content
-	.media()
-	.iter()
-	.filter(|media| media.media_type() != &MediaType::Audio)
-	.find_map(|media| media.thumbnail().filter(|s| !s.is_empty()));
-
-	match thumb {
+	let media = content.media();
+	match media.thumbnail() {
 		Some(thumb) => {
 			let thumbnail_url = Url::parse(thumb)?;
 			let filename = filename_from_url(&thumbnail_url)

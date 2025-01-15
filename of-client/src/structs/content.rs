@@ -8,6 +8,7 @@ use reqwest::IntoUrl;
 use serde::Deserialize;
 use chrono::{DateTime, Utc};
 
+#[derive(Clone, Copy)]
 pub enum ContentType {
 	Posts,
 	Chats,
@@ -96,12 +97,12 @@ pub trait Content {
 	fn content_type() -> ContentType;
 }
 
-pub trait CanLike: Content {
+pub trait CanLike {
 	fn can_like(&self) -> bool;
 	fn like_url(&self) -> impl IntoUrl;
 }
 
-pub trait HasMedia: Content {
+pub trait HasMedia {
 	type Media: media::Media + Sync + Send;
 	fn media(&self) -> &[Self::Media];
 }
