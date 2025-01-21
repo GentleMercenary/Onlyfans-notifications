@@ -1,5 +1,4 @@
 #![feature(let_chains)]
-#![feature(option_zip)]
 
 pub mod helpers;
 pub mod handlers;

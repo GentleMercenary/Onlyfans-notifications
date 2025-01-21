@@ -62,6 +62,20 @@ where
 	}
 }
 
+impl<X> Merge<Option<X>> for Option<X>
+where
+	X: Merge<X> + Clone
+{
+	fn merge(&self, base: &Option<X>) -> Option<X> {
+		match (self, base) {
+			(None, None) => None,
+			(Some(a), None) => Some(a.clone()),
+			(None, Some(b)) => Some(b.clone()),
+			(Some(a), Some(b)) => Some(a.merge(b))
+		}
+	}
+}
+
 #[derive(Deserialize, Debug, Clone)]
 #[serde(deny_unknown_fields)]
 pub struct AllContent {
@@ -205,9 +219,9 @@ struct ExceptionActions {
 impl Merge<ExceptionActions> for ExceptionActions {
 	fn merge(&self, base: &ExceptionActions) -> ExceptionActions {
 		ExceptionActions {
-			notify: self.notify.as_ref().zip_with(base.notify.as_ref(), |existing, incoming| existing.merge(incoming)),
-			download: self.download.as_ref().zip_with(base.download.as_ref(), |existing, incoming| existing.merge(incoming)),
-			like: self.like.as_ref().zip_with(base.like.as_ref(), |existing, incoming| existing.merge(incoming))
+			notify: self.notify.merge(&base.notify),
+			download: self.download.merge(&base.download),
+			like: self.like.merge(&base.like)
 		}
 	}
 }
