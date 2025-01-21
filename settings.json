@@ -1,6 +1,12 @@
 {
-    "notify": true,
-    "download": true,
-	"like": false,
-	"reconnect": true
+	"actions": {
+		"default": {
+			"notify": true,
+			"download": true,
+			"like": false
+		},
+		"exceptions": []
+	},
+	"reconnect": true,
+	"log_level": "info"
 }
