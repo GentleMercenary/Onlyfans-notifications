@@ -15,23 +15,9 @@ Files are downloaded to `data/{model_name}/{origin}/{content_type}/{filename}` w
 This is the same format as the default for [this scraper](https://github.com/DIGITALCRIMINALs/OnlyFans), so you can symlink the `data` folder to wherever you store your scrapes or vice versa.
 
 ## Settings
-You can choose to receive notifications, download data or like new content in settings.json. Setting any to true or false enables/disables this functionality. Aside from this you can list the usernames for whom you wish these features to be active.
-For more granular control, you can specify for which types of content to enable that feature. <br>
-Allowed content types are `posts, messages, stories, notifications, streams`. Any missing fields will default to being `false`.
-
-#### Example
-If you wanted to receive notifications for your entire following list, only download the media for certain models, and like every post on your feed alongside all stories for a specific user, your settings.json would look like this:
-```
-{
-    "notify": true,
-    "download": ["username1", "username2"],
-    "like": {
-        "posts": true,
-        "stories": ["username3"]
-    }
-}
-```
-Note that a model's username and name can be different. The username can most easily be found in the profile url: `onlyfans.com/{username}`
+See [settings documentation](SETTINGS.md)
+> [!CAUTION]
+> The program will crash on startup with no logs if your settings are invalid. It is recommended you initially launch the program with the provided settings file, modify the settings as you like, and then use the icon context menu to reload the settings. In this case, if your settings are invalid the log will contain information on what exactly went wrong
 
 ## DRM
 This program uses FFmpeg to decrypt and mux drm-protected files. If a system installation of FFmpeg is not found this program will download the latest version. <br>
