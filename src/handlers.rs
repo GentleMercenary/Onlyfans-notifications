@@ -15,7 +15,7 @@ use tempfile::TempDir;
 use futures::{future::{join3, join_all, try_join, OptionFuture}, FutureExt};
 use nanohtml2text::html2text;
 use of_daemon::structs::{self, Message, TaggedMessage};
-use of_client::{content::{self, ContentType, HasMedia}, drm::MPDData, media::{Feed, Media, MediaType, Thumbnail, DRM}, user::User, widevine::Cdm, OFClient};
+use of_client::{content::{self, CanLike, ContentType, HasMedia}, drm::MPDData, media::{Feed, Media, MediaType, Thumbnail, DRM}, user::User, widevine::Cdm, OFClient};
 use winrt_toast::{content::{image::{ImageHintCrop, ImagePlacement}, text::TextPlacement}, Header, Image, Text, Toast};
 
 #[derive(Clone)]
@@ -180,7 +180,7 @@ pub struct ResolvedContentActions {
 	pub like: bool,
 }
 
-impl<T: HasMedia> ResolveContentActions<T> for MediaContentActions<ConcreteMediaSpecificSelection> {
+impl<T: HasMedia + CanLike> ResolveContentActions<T> for MediaContentActions<ConcreteMediaSpecificSelection> {
 	type Resolved = ResolvedContentActions;
 	fn resolve(&self, data: &T) -> Self::Resolved {
 		let has_media = !data.media().is_empty();
@@ -198,18 +198,18 @@ impl<T: HasMedia> ResolveContentActions<T> for MediaContentActions<ConcreteMedia
 		ResolvedContentActions {
 			notify: resolver(&self.notify),
 			download: resolver(&self.download),
-			like: resolver(&self.like)
+			like: data.can_like() && resolver(&self.like)
 		}
 	}
 }
 
 impl ResolveContentActions<content::Story> for StoryContentActions {
 	type Resolved = ResolvedContentActions;
-	fn resolve(&self, _data: &content::Story) -> Self::Resolved {
+	fn resolve(&self, data: &content::Story) -> Self::Resolved {
 		ResolvedContentActions {
 			notify: *self.notify,
 			download: *self.download,
-			like: *self.like
+			like: data.can_like() && *self.like
 		}
 	}
 }
