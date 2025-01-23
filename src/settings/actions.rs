@@ -1,61 +1,23 @@
-use std::{collections::{HashMap, HashSet}, marker::PhantomData};
-use serde::{de::{self, Visitor}, Deserialize, Deserializer};
-use crate::settings::concrete::{ConcreteSelection, Toggle};
-
-use super::concrete::{MessageSpecificSelection, PostSpecificSelection};
-
-#[derive(Debug, Clone)]
-pub enum ContentAction<T> {
-	General(Toggle),
-	Specific(T)
-}
-
-impl<'de, T: Deserialize<'de>> Deserialize<'de> for ContentAction<T> {
-	fn deserialize<D: Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
-		struct GeneralOrSpecific<T>(PhantomData<T>);
-		impl<'de, T: Deserialize<'de>> Visitor<'de> for GeneralOrSpecific<T> {
-			type Value = ContentAction<T>;
-
-			fn expecting(&self, formatter: &mut std::fmt::Formatter) -> std::fmt::Result {
-				formatter.write_str("A boolean, \"all\", \"none\" or a map defining a selection per content type")
-			}
-
-			fn visit_bool<E: de::Error>(self, v: bool) -> Result<Self::Value, E> {
-				Ok(ContentAction::General(Toggle(v)))
-			}
-
-			fn visit_str<E: de::Error>(self, v: &str) -> Result<Self::Value, E> {
-				v.parse::<Toggle>()
-				.map(|toggle| ContentAction::General(toggle))
-				.map_err(|_| de::Error::unknown_variant(v, &["all", "none"]))
-			}
-
-			fn visit_map<A: de::MapAccess<'de>>(self, map: A) -> Result<Self::Value, A::Error> {
-				Deserialize::deserialize(de::value::MapAccessDeserializer::new(map))
-				.map(ContentAction::Specific)
-			}
-		}
-
-		deserializer.deserialize_any(GeneralOrSpecific(PhantomData))
-	}
-}
+use std::collections::{HashMap, HashSet};
+use serde::{Deserialize, Deserializer};
+use super::selection::{Selection, Toggle, MessageSpecificSelection, PostSpecificSelection};
 
 trait Merge<T> {
 	fn merge(&self, base: &T) -> T;
 }
 
-impl<X, Y> Merge<ContentAction<X>> for ContentAction<Y>
+impl<X, Y> Merge<Selection<X>> for Selection<Y>
 where
 	Y: Merge<X>,
 	X: Clone + From<Toggle>
 {
-	fn merge(&self, base: &ContentAction<X>) -> ContentAction<X> {
+	fn merge(&self, base: &Selection<X>) -> Selection<X> {
 		match self {
-			ContentAction::General(general) => ContentAction::General(*general),
-			ContentAction::Specific(specific) => ContentAction::Specific(
+			Selection::General(general) => Selection::General(*general),
+			Selection::Specific(specific) => Selection::Specific(
 				match base {
-					ContentAction::General(base_general) => specific.merge(&X::from(*base_general)),
-					ContentAction::Specific(base_specific) => specific.merge(base_specific)
+					Selection::General(base_general) => specific.merge(&X::from(*base_general)),
+					Selection::Specific(base_specific) => specific.merge(base_specific)
 				}
 			)
 		}
@@ -79,8 +41,8 @@ where
 #[derive(Deserialize, Debug, Clone)]
 #[serde(deny_unknown_fields)]
 pub struct AllContent {
-	pub posts: ConcreteSelection<PostSpecificSelection>,
-	pub messages: ConcreteSelection<MessageSpecificSelection>,
+	pub posts: Selection<PostSpecificSelection>,
+	pub messages: Selection<MessageSpecificSelection>,
 	pub stories: Toggle,
 	pub streams: Toggle,
 	pub notifications: Toggle
@@ -89,8 +51,8 @@ pub struct AllContent {
 #[derive(Deserialize, Debug, Clone)]
 #[serde(deny_unknown_fields)]
 struct PartialAllContent {
-	posts: Option<ConcreteSelection<PostSpecificSelection>>,
-	messages: Option<ConcreteSelection<MessageSpecificSelection>>,
+	posts: Option<Selection<PostSpecificSelection>>,
+	messages: Option<Selection<MessageSpecificSelection>>,
 	stories: Option<Toggle>,
 	streams: Option<Toggle>,
 	notifications: Option<Toggle>
@@ -99,16 +61,16 @@ struct PartialAllContent {
 #[derive(Deserialize, Debug, Clone)]
 #[serde(deny_unknown_fields)]
 pub struct MediaContent {
-	pub posts: ConcreteSelection<PostSpecificSelection>,
-	pub messages: ConcreteSelection<MessageSpecificSelection>,
+	pub posts: Selection<PostSpecificSelection>,
+	pub messages: Selection<MessageSpecificSelection>,
 	pub stories: Toggle,
 }
 
 #[derive(Deserialize, Debug, Clone)]
 #[serde(deny_unknown_fields)]
 struct PartialMediaContent {
-	posts: Option<ConcreteSelection<PostSpecificSelection>>,
-	messages: Option<ConcreteSelection<MessageSpecificSelection>>,
+	posts: Option<Selection<PostSpecificSelection>>,
+	messages: Option<Selection<MessageSpecificSelection>>,
 	stories: Option<Toggle>,
 }
 
@@ -159,8 +121,8 @@ impl Merge<PartialMediaContent> for PartialMediaContent {
 impl From<Toggle> for AllContent {
 	fn from(value: Toggle) -> Self {
 		Self {
-			posts: ConcreteSelection::Toggle(value),
-			messages: ConcreteSelection::Toggle(value),
+			posts: Selection::General(value),
+			messages: Selection::General(value),
 			stories: value,
 			streams: value,
 			notifications: value
@@ -171,8 +133,8 @@ impl From<Toggle> for AllContent {
 impl From<Toggle> for PartialAllContent {
 	fn from(value: Toggle) -> Self {
 		Self {
-			posts: Some(ConcreteSelection::Toggle(value)),
-			messages: Some(ConcreteSelection::Toggle(value)),
+			posts: Some(Selection::General(value)),
+			messages: Some(Selection::General(value)),
 			stories: Some(value),
 			streams: Some(value),
 			notifications: Some(value)
@@ -183,8 +145,8 @@ impl From<Toggle> for PartialAllContent {
 impl From<Toggle> for MediaContent {
 	fn from(value: Toggle) -> Self {
 		Self {
-			posts: ConcreteSelection::Toggle(value),
-			messages: ConcreteSelection::Toggle(value),
+			posts: Selection::General(value),
+			messages: Selection::General(value),
 			stories: value
 		}
 	}
@@ -193,8 +155,8 @@ impl From<Toggle> for MediaContent {
 impl From<Toggle> for PartialMediaContent {
 	fn from(value: Toggle) -> Self {
 		Self {
-			posts: Some(ConcreteSelection::Toggle(value)),
-			messages: Some(ConcreteSelection::Toggle(value)),
+			posts: Some(Selection::General(value)),
+			messages: Some(Selection::General(value)),
 			stories: Some(value)
 		}
 	}
@@ -203,17 +165,17 @@ impl From<Toggle> for PartialMediaContent {
 #[derive(Deserialize, Debug, Clone)]
 #[serde(deny_unknown_fields)]
 pub struct DefaultActions {
-	pub notify: ContentAction<AllContent>,
-	pub download: ContentAction<MediaContent>,
-	pub like: ContentAction<MediaContent>,
+	pub notify: Selection<AllContent>,
+	pub download: Selection<MediaContent>,
+	pub like: Selection<MediaContent>,
 }
 
 #[derive(Deserialize, Debug, Clone)]
 #[serde(deny_unknown_fields)]
 struct ExceptionActions {
-	notify: Option<ContentAction<PartialAllContent>>,
-	download: Option<ContentAction<PartialMediaContent>>,
-	like: Option<ContentAction<PartialMediaContent>>
+	notify: Option<Selection<PartialAllContent>>,
+	download: Option<Selection<PartialMediaContent>>,
+	like: Option<Selection<PartialMediaContent>>
 }
 
 impl Merge<ExceptionActions> for ExceptionActions {
@@ -277,9 +239,9 @@ impl Default for Actions {
 	fn default() -> Self {
 		Self {
 			default: DefaultActions {
-				notify: ContentAction::General(Toggle(true)),
-				download: ContentAction::General(Toggle(true)),
-				like: ContentAction::General(Toggle(false)),
+				notify: Selection::General(Toggle(true)),
+				download: Selection::General(Toggle(true)),
+				like: Selection::General(Toggle(false)),
 			},
 			exceptions: HashMap::new()
 		}

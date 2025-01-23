@@ -26,7 +26,7 @@ impl<'de> Deserialize<'de> for Toggle {
 			type Value = Toggle;
 	
 			fn expecting(&self, formatter: &mut std::fmt::Formatter) -> std::fmt::Result {
-				formatter.write_str("a boolean, \"all\", or \"none\"")
+				formatter.write_str("a boolean, 'all', or 'none'")
 			}
 	
 			fn visit_bool<E: de::Error>(self, v: bool) -> Result<Self::Value, E> {
@@ -49,32 +49,38 @@ impl Deref for Toggle {
 }
 
 #[derive(Debug, Clone)]
-pub enum ConcreteSelection<T> {
-	Toggle(Toggle),
+pub enum Selection<T> {
+	General(Toggle),
 	Specific(T)
 }
 
-impl<'de, T: Deserialize<'de>> Deserialize<'de> for ConcreteSelection<T> {
-	fn deserialize<D: Deserializer<'de>,>(deserializer: D) -> Result<Self, D::Error> {
-		struct ConcreteSelectionVisitor<T>(PhantomData<T>);
-		impl<'de, T: Deserialize<'de>> Visitor<'de> for ConcreteSelectionVisitor<T> {
-			type Value = ConcreteSelection<T>;
+impl<'de, T: Deserialize<'de>> Deserialize<'de> for Selection<T> {
+	fn deserialize<D: Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+		struct GeneralOrSpecific<T>(PhantomData<T>);
+		impl<'de, T: Deserialize<'de>> Visitor<'de> for GeneralOrSpecific<T> {
+			type Value = Selection<T>;
 
 			fn expecting(&self, formatter: &mut std::fmt::Formatter) -> std::fmt::Result {
-				formatter.write_str("a boolean, \"all\", \"none\", or a type-specific struct")
+				formatter.write_str("a boolean, 'all', 'none' or a type-specific struct")
 			}
 
 			fn visit_bool<E: de::Error>(self, v: bool) -> Result<Self::Value, E> {
-				Ok(ConcreteSelection::Toggle(Toggle(v)))
+				Ok(Selection::General(Toggle(v)))
+			}
+
+			fn visit_str<E: de::Error>(self, v: &str) -> Result<Self::Value, E> {
+				v.parse::<Toggle>()
+				.map(Selection::General)
+				.map_err(|_| de::Error::unknown_variant(v, &["all", "none"]))
 			}
 
 			fn visit_map<A: de::MapAccess<'de>>(self, map: A) -> Result<Self::Value, A::Error> {
 				Deserialize::deserialize(de::value::MapAccessDeserializer::new(map))
-				.map(ConcreteSelection::Specific)
+				.map(Selection::Specific)
 			}
 		}
 
-		deserializer.deserialize_any(ConcreteSelectionVisitor(PhantomData))
+		deserializer.deserialize_any(GeneralOrSpecific(PhantomData))
 	}
 }
 
@@ -104,9 +110,9 @@ impl<'de> Deserialize<'de> for MediaSelection {
 }
 
 #[derive(Deserialize, Debug, Clone, Copy)]
-pub struct ConcreteMediaSpecificSelection {
+pub struct MediaContentSpecificSelection {
 	pub media: MediaSelection
 }
 
-pub type PostSpecificSelection = ConcreteMediaSpecificSelection;
-pub type MessageSpecificSelection = ConcreteMediaSpecificSelection;
+pub type PostSpecificSelection = MediaContentSpecificSelection;
+pub type MessageSpecificSelection = MediaContentSpecificSelection;

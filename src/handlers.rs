@@ -1,9 +1,11 @@
 use crate::{
 	helpers::{fetch_file, filename_from_url, get_avatar, get_thumbnail, handle_download, show_notification},
 	settings::{
-		markers::*, ContentActions, MediaContentActions, ResolveContentActions, Settings, StoryContentActions,
-		concrete::{ConcreteMediaSpecificSelection, ConcreteSelection, MediaSelection, Toggle}
-	}};
+		Settings,
+		actions::{AllContent, DefaultActions, MediaContent},
+		selection::{MediaContentSpecificSelection, MediaSelection, Selection},
+	}
+};
 
 use log::*;
 use reqwest::Url;
@@ -174,49 +176,53 @@ impl Context {
 	}
 }
 
-pub struct ResolvedContentActions {
-	pub notify: bool,
-	pub download: bool,
-	pub like: bool,
+struct MediaContentActions {
+	notify: bool,
+	download: bool,
+	like: bool,
 }
 
-impl<T: HasMedia + CanLike> ResolveContentActions<T> for MediaContentActions<ConcreteMediaSpecificSelection> {
-	type Resolved = ResolvedContentActions;
-	fn resolve(&self, data: &T) -> Self::Resolved {
-		let has_media = !data.media().is_empty();
-		let has_thumbnail = data.media().thumbnail().is_some();
+trait Resolve<T> {
+	type Resolved;
+	fn resolve(&self, data: T) -> Self::Resolved;
+}
 
-		let resolver = |concrete: &ConcreteSelection<ConcreteMediaSpecificSelection>| match concrete {
-			ConcreteSelection::Toggle(toggle) => **toggle,
-			ConcreteSelection::Specific(specific) => match specific.media {
+impl <T, F, G> Resolve<(&T, F, G)> for DefaultActions
+where
+	T: HasMedia + CanLike,
+	F: Fn(&AllContent) -> &Selection<MediaContentSpecificSelection>,
+	G: Fn(&MediaContent) -> &Selection<MediaContentSpecificSelection>,
+{
+	type Resolved = MediaContentActions;
+	fn resolve(&self, data: (&T, F, G)) -> Self::Resolved {
+		let (content, content_selector, content_selector_media) = data;
+		let has_media = !content.media().is_empty();
+		let has_thumbnail = content.media().thumbnail().is_some();
+
+		let resolver = |selection: &Selection<MediaContentSpecificSelection>| match selection {
+			Selection::General(toggle) => **toggle,
+			Selection::Specific(specific) => match specific.media {
 				MediaSelection::Any => has_media,
 				MediaSelection::Thumbnail => has_thumbnail,
 				MediaSelection::None => !has_media,
 			}
 		};
 
-		ResolvedContentActions {
-			notify: resolver(&self.notify),
-			download: resolver(&self.download),
-			like: data.can_like() && resolver(&self.like)
+		MediaContentActions {
+			notify: match &self.notify {
+				Selection::General(toggle) => **toggle,
+				Selection::Specific(specific) => resolver(content_selector(specific))
+			},
+			download: match &self.download {
+				Selection::General(toggle) => **toggle,
+				Selection::Specific(specific) => resolver(content_selector_media(specific))
+			},
+			like: content.can_like() && match &self.like {
+				Selection::General(toggle) => **toggle,
+				Selection::Specific(specific) => resolver(content_selector_media(specific))
+			}
 		}
 	}
-}
-
-impl ResolveContentActions<content::Story> for StoryContentActions {
-	type Resolved = ResolvedContentActions;
-	fn resolve(&self, data: &content::Story) -> Self::Resolved {
-		ResolvedContentActions {
-			notify: *self.notify,
-			download: *self.download,
-			like: data.can_like() && *self.like
-		}
-	}
-}
-
-impl<T> ResolveContentActions<T> for Toggle {
-	type Resolved = bool;
-	fn resolve(&self, _data: &T) -> Self::Resolved { **self }
 }
 
 pub trait Handler {
@@ -255,11 +261,22 @@ impl Handler for Message {
 	}
 }
 
+impl Resolve<&structs::Notification> for Settings {
+	type Resolved = bool;
+	fn resolve(&self, data: &structs::Notification) -> Self::Resolved {
+		let actions = self.actions.get_actions_for(&data.user.username);
+		match actions.notify {
+			Selection::General(toggle) => *toggle,
+			Selection::Specific(specific) => *specific.notifications
+		}
+	}
+}
+
 impl Handler for structs::Notification {
 	fn handle(self, context: &Context) -> anyhow::Result<Option<JoinHandle<()>>> {
 		Ok(
-			ContentActions::<NotificationMarker>::content_actions(&context.settings, &self.user.username)
-			.resolve(&self.content)
+			context.settings.read().unwrap()
+			.resolve(&self)
 			.then(|| tokio::spawn({
 				let context = context.clone();
 				async move { let _ = context.notify(&self.content, &self.user).await; }
@@ -267,11 +284,22 @@ impl Handler for structs::Notification {
 	}
 }
 
+impl Resolve<&structs::Stream> for Settings {
+	type Resolved = bool;
+	fn resolve(&self, data: &structs::Stream) -> Self::Resolved {
+		let actions = self.actions.get_actions_for(&data.user.username);
+		match actions.notify {
+			Selection::General(toggle) => *toggle,
+			Selection::Specific(specific) => *specific.streams
+		}
+	}
+}
+
 impl Handler for structs::Stream {
 	fn handle(self, context: &Context) -> anyhow::Result<Option<JoinHandle<()>>> {
 		Ok(
-			ContentActions::<StreamMarker>::content_actions(&context.settings, &self.user.username)
-			.resolve(&self.content)
+			context.settings.read().unwrap()
+			.resolve(&self)
 			.then(|| tokio::spawn({
 				let context = context.clone();
 				async move { let _ = context.notify_with_thumbnail(&self.content, &self.user).await; }
@@ -285,8 +313,14 @@ impl Handler for structs::PostPublished {
 			let context = context.clone();
 			async move {
 				if let Ok(content) = context.client.get_post(self.id).await {
-					let actions = ContentActions::<PostMarker>::content_actions(&context.settings, &content.author.username)
-						.resolve(&content);
+					let actions = context.settings.read().unwrap()
+						.actions
+						.get_actions_for(&content.author.username)
+						.resolve((
+							&content,
+							|content: &AllContent| &content.posts,
+							|content: &MediaContent| &content.posts,
+						));
 
 					join3(
 						Into::<OptionFuture<_>>::into(actions.notify
@@ -304,8 +338,14 @@ impl Handler for structs::PostPublished {
 
 impl Handler for structs::Chat {
 	fn handle(self, context: &Context) -> anyhow::Result<Option<JoinHandle<()>>> {
-		let actions = ContentActions::<MessageMarker>::content_actions(&context.settings, &self.from_user.username)
-			.resolve(&self.content);
+		let actions = context.settings.read().unwrap()
+		.actions
+		.get_actions_for(&self.from_user.username)
+		.resolve((
+			&self.content,
+			|content: &AllContent| &content.messages,
+			|content: &MediaContent| &content.messages,
+		));
 
 		Ok(Some(tokio::spawn({
 			let context = context.clone();
@@ -323,6 +363,29 @@ impl Handler for structs::Chat {
 	}
 }
 
+impl Resolve<(&content::Story, &User)> for Settings {
+	type Resolved = MediaContentActions;
+	fn resolve(&self, data: (&content::Story, &User)) -> Self::Resolved {
+		let (content, user) = data;
+		let actions = self.actions.get_actions_for(&user.username);
+
+		MediaContentActions {
+			notify: match actions.notify {
+				Selection::General(toggle) => *toggle,
+				Selection::Specific(specific) => *specific.stories
+			},
+			download: match actions.download {
+				Selection::General(toggle) => *toggle,
+				Selection::Specific(specific) => *specific.stories
+			},
+			like: content.can_like() && match actions.like {
+				Selection::General(toggle) => *toggle,
+				Selection::Specific(specific) => *specific.stories
+			}
+		}
+	}
+}
+
 impl Handler for Vec<structs::Story> {
 	fn handle(self, context: &Context) -> anyhow::Result<Option<JoinHandle<()>>> {
 		Ok(Some(tokio::spawn({
@@ -330,8 +393,8 @@ impl Handler for Vec<structs::Story> {
 			async move {
 				join_all(self.iter().map(|story| async {
 					if let Ok(author) = context.client.get_user(story.user_id).await {
-						let actions = ContentActions::<StoryMarker>::content_actions(&context.settings, &author.username)
-							.resolve(&story.content);
+						let actions = context.settings.read().unwrap()
+							.resolve((&story.content, &author));
 
 						join3(
 							Into::<OptionFuture<_>>::into(actions.notify
