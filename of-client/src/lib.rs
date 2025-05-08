@@ -24,6 +24,7 @@ use std::{borrow::Cow, sync::{Arc, RwLock}, time::{SystemTime, UNIX_EPOCH}};
 
 #[derive(Deserialize, Debug, Clone)]
 struct DynamicRules {
+	#[serde(rename = "app-token")]
 	app_token: String,
 	static_param: String,
 	prefix: String,
@@ -34,7 +35,7 @@ struct DynamicRules {
 
 #[once(time = 3600, result = true, sync_writes = true)]
 async fn get_dynamic_rules() -> reqwest::Result<DynamicRules> {
-	reqwest::get("https://raw.githubusercontent.com/deviint/onlyfans-dynamic-rules/main/dynamicRules.json")
+	reqwest::get("https://raw.githubusercontent.com/rafa-9/dynamic-rules/refs/heads/main/rules.json")
 	.and_then(Response::json::<DynamicRules>)
 	.await
 	.inspect_err(|err| error!("Error reading dynamic rules: {err:?}"))
