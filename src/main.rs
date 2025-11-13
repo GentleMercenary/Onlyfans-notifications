@@ -42,11 +42,6 @@ async fn main() -> anyhow::Result<()> {
 		.inspect_err(|e| warn!("CDM could not be initialized: {e}"))
 		.ok();
 
-	if cdm.is_some() {
-		ffmpeg_sidecar::download::auto_download()
-		.inspect_err(|e| error!("FFmpeg installation failed: {e}"))?;
-	}
-
 	let settings = Arc::new(RwLock::new(settings));
 
 	let event_loop = EventLoop::<Events>::with_user_event()

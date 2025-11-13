@@ -3,7 +3,7 @@ cargo-features = ["trim-paths"]
 [package]
 name = "of-notifier"
 version = "0.1.0"
-edition = "2021"
+edition = "2024"
 
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 
@@ -58,7 +58,7 @@ filetime = "0.2.25"
 httpdate = { workspace = true }
 
 base16 = "0.2"
-ffmpeg-sidecar = "2.0.5"
+ffmpeg-sidecar = { version = "2.0.5", default-features = false }
 
 of-client = { workspace = true, features = ["drm"] }
 of-daemon = { workspace = true }

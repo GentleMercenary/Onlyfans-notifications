@@ -20,7 +20,7 @@ See [settings documentation](SETTINGS.md)
 > The program will crash on startup with no logs if your settings are invalid. It is recommended you initially launch the program with the provided settings file, modify the settings as you like, and then use the icon context menu to reload the settings. In this case, if your settings are invalid the log will contain information on what exactly went wrong
 
 ## DRM
-This program uses FFmpeg to decrypt and mux drm-protected files. If a system installation of FFmpeg is not found this program will download the latest version. <br>
+This program requires FFmpeg to decrypt and mux drm-protected files. <br>
 This program will look for a CDM named "device.wvd" in the same path as the executable. If you have seperate client id and private key files you can use [this](https://emarsden.github.io/pssh-box-wasm/convert/) tool to convert them.
 
 ## Behaviour

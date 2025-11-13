@@ -4,7 +4,6 @@ use std::time::SystemTime;
 use futures::TryFutureExt;
 use http::header::LAST_MODIFIED;
 use httpdate::parse_http_date;
-use log::*;
 use minidom::Element;
 use reqwest::Url;
 use reqwest_cookie_store::RawCookie;
