@@ -69,8 +69,8 @@ pub struct Chat {
 #[derive(Deserialize, Debug)]
 pub struct ChatCount {
 	chat_messages: u32,
-	count_priority_chat: u32,
-	unread_tips: u32
+	count_priority_chat: Option<u32>,
+	unread_tips: Option<u32>
 }
 
 #[derive(Deserialize, Debug)]
@@ -100,12 +100,27 @@ pub struct StoryTip {
 }
 
 #[derive(Deserialize, Debug)]
+#[serde(rename_all = "snake_case")]
+enum NotificationSubType {
+	// message
+	NewStream,
+	PromoregForExpired,
+
+	// subscribed
+	NewSubscriber,
+	SubscribeWasExpired,
+
+	// Price_changed
+	PriceChangedNotFromFree,
+	NewDiscountForSubscriber,
+}
+
+#[derive(Deserialize, Debug)]
 #[serde(rename_all = "camelCase")]
 pub struct Notification {
 	pub user: User,
-	#[serde(rename = "type")]
-	notif_type: String,
-	sub_type: String,
+	#[serde(rename = "subType")]
+	r#type: NotificationSubType,
 	#[serde(flatten)]
 	pub content: content::Notification,
 }
@@ -160,22 +175,13 @@ pub struct StreamStop {
 pub struct StreamUpdate {
 	id: u64,
 	raw_description: String,
-	is_active: bool,
-	is_finished: bool,
+	scheduled_at: Option<DateTime<Utc>>,
 	started_at: DateTime<Utc>,
 	finished_at: Option<DateTime<Utc>>,
 	room: String,
-	likes_count: u32,
-	views_count: u32,
-	comments_count: u32,
-	thumb_url: String,
+	// thumb_url: String,
 	user: User,
-	can_join: bool,
-	partners: Vec<u64>,
-	is_scheduled: bool,
-	scheduled_at: Option<DateTime<Utc>>,
-	duration: u64,
-	tips_goal: String,
+	// partners: Vec<u64>,
 }
 
 #[derive(Deserialize, Debug)]
@@ -196,7 +202,7 @@ pub struct StreamComment {
 }
 
 #[derive(Deserialize, Debug)]
-pub struct StreamLike {
+pub struct StreamLikes {
 	#[serde(deserialize_with = "from_str")]
 	stream_user_id: u64
 }
@@ -214,10 +220,13 @@ pub struct StreamTip {
 #[derive(Deserialize, Debug)]
 pub struct StreamTips {
 	stream_tips: StreamTip,
-	tips_count: u32,
-	tips_goal: String,
-	tips_goal_sum: f32,
-	tips_goal_progress: f32
+	tips_count: u32
+}
+
+#[derive(Deserialize, Debug)]
+pub struct Toast {
+	id: u64,
+	title: String,
 }
 
 #[derive(Deserialize, Debug)]
@@ -232,7 +241,7 @@ pub enum TaggedMessage {
 
 	Api2ChatMessage(Chat),
 
-	Stories(Vec<Story>),
+	Stories([Story; 1]),
 	StoryTips(StoryTip),
 
 	Stream(Stream),
@@ -242,9 +251,9 @@ pub enum TaggedMessage {
 	StreamLook(StreamLook),
 	StreamUnlook(StreamLook),
 	StreamComment(StreamComment),
-	StreamLike(StreamLike),
+	StreamLikes(StreamLikes),
 
-	HasNewHints(bool),
+	Toasts([Toast; 1]),
 }
 
 #[derive(Deserialize, Debug)]

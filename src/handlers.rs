@@ -393,26 +393,25 @@ impl Resolve<(&content::Story, &User)> for Settings {
 	}
 }
 
-impl Handler for Vec<structs::Story> {
+impl Handler for [structs::Story; 1] {
 	fn handle(self, context: &Context) -> anyhow::Result<Option<JoinHandle<()>>> {
 		Ok(Some(tokio::spawn({
 			let context = context.clone();
 			async move {
-				join_all(self.iter().map(|story| async {
-					if let Ok(author) = context.client.get_user(story.user_id).await {
-						let actions = context.settings.read().unwrap()
-							.resolve((&story.content, &author));
+				let story = &self[0];
+				if let Ok(author) = context.client.get_user(story.user_id).await {
+					let actions = context.settings.read().unwrap()
+						.resolve((&story.content, &author));
 
-						join3(
-							<OptionFuture<_>>::from(actions.notify
-							.then(|| context.notify_with_thumbnail(&story.content, &author))),
-							<OptionFuture<_>>::from(actions.download
-							.then(|| context.download(&story.content, &author))),
-							<OptionFuture<_>>::from(actions.like
-							.then(|| context.like(&story.content))),
-						).await;
-					}
-				})).await;
+					join3(
+						<OptionFuture<_>>::from(actions.notify
+						.then(|| context.notify_with_thumbnail(&story.content, &author))),
+						<OptionFuture<_>>::from(actions.download
+						.then(|| context.download(&story.content, &author))),
+						<OptionFuture<_>>::from(actions.like
+						.then(|| context.like(&story.content))),
+					).await;
+				}
 			}
 		})))
 	}

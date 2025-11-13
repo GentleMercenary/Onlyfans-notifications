@@ -251,12 +251,12 @@ socket_test!(test_stream_comment_message, r#"{
 }"#, Message::Tagged(TaggedMessage::StreamComment(_)));
 
 socket_test!(test_stream_like_message, r#"{
-	"stream_like": {
+	"stream_likes": {
 		"stream_user_id": "15585607",
 		"x": 0,
 		"y": 0
 	}
-}"#, Message::Tagged(TaggedMessage::StreamLike(_)));
+}"#, Message::Tagged(TaggedMessage::StreamLikes(_)));
 
 socket_test!(test_stream_tips_message, r#"{
 	"stream_tips": {
@@ -275,14 +275,8 @@ socket_test!(test_stream_tips_message, r#"{
 	},
 	"is_show_tips": true,
 	"tips_count": 5,
-	"tips_summ": 24.5,
-	"is_show_tips_goal": true,
-	"tips_goal": "$100 Tip goal \u2665",
-	"tips_goal_sum": 100,
-	"tips_goal_progress": 24.5
+	"tips_summ": 24.5
 }"#, Message::StreamTips(_));
-
-
 
 socket_test!(test_chat_count_message, r#"{
 	"chat_messages": 3,
@@ -290,4 +284,41 @@ socket_test!(test_chat_count_message, r#"{
 	"unread_tips": 1
 }"#, Message::ChatCount(_));
 
-socket_test!(test_new_hints_message, r#"{"has_new_hints":true}"#, Message::Tagged(TaggedMessage::HasNewHints(_)));
+socket_test!(test_toasts_message, r#"{
+	"toasts": [
+		{
+			"id": 1234,
+			"title": "Promotions",
+			"text": "asdf",
+			"type": "message",
+			"data": {
+				"code": "new_stream",
+				"template": "asdf",
+				"replacements": {
+					"{USER_LINK}": "<a href='https:\/\/onlyfans.com\/onlyfans\/live'>Onlyfans<\/a>",
+					"{USER_NAME}": "Onlyfans",
+					"{STREAM_URL}": "https:\/\/onlyfans.com\/onlyfans\/live",
+					"{RELATED_USER_ID}": "15585607",
+					"{RELATED_USER_NAME}": "Onlyfans",
+					"{RELATED_USER_LOGIN}": "onlyfans",
+					"{RELATED_USER_URL}": "https:\/\/onlyfans.com\/Onlyfans",
+					"{RELATED_USER_AVATAR}": "https://public.onlyfans.com/files/m/mk/mka/mkamcrf6rjmcwo0jj4zoavhmalzohe5a1640180203/avatar.jpg",
+					"{RELATED_USER_HAS_AVATAR}": 1,
+					"{RELATED_USER_SHORT_NAME}": "OF"
+				},
+				"relatedUser": {
+					"view": "to",
+					"id": 19526127,
+					"name": "Onlyfans",
+					"username": "onlyfans",
+					"isVerified": true,
+					"avatar": "https://public.onlyfans.com/files/m/mk/mka/mkamcrf6rjmcwo0jj4zoavhmalzohe5a1640180203/avatar.jpg",
+					"avatarThumbs": {
+						"c50": "",
+						"c144": ""
+					}
+				}
+			}
+		}
+	]
+}"#, Message::Tagged(TaggedMessage::Toasts(_)));
