@@ -10,6 +10,7 @@ log = { workspace = true }
 futures = { workspace = true }
 futures-util = { workspace = true }
 serde = { workspace = true, features = ["derive"] }
+serde_json = { workspace = true }
 deserializers = { workspace = true }
 chrono = { workspace = true, features = ["serde"] }
 cached = { version = "0.54.0", features = ["async"] }

@@ -5,4 +5,5 @@ Cargo.lock
 /logs
 auth.json
 settings.json
+rules.json
 device.wvd

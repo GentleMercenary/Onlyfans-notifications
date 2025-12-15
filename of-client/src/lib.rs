@@ -1,3 +1,5 @@
+#![feature(once_cell_try)]
+
 #[macro_use]
 extern crate log;
 
@@ -6,6 +8,7 @@ pub mod structs;
 pub mod drm;
 #[cfg(feature = "drm")]
 pub use widevine;
+mod rules;
 
 pub use reqwest;
 pub use reqwest_middleware;
@@ -16,30 +19,19 @@ use log::*;
 use reqwest_cookie_store::CookieStoreRwLock;
 use reqwest_middleware::{ClientBuilder, ClientWithMiddleware, Middleware, Next};
 use http::Extensions;
-use serde::Deserialize;
 use cached::proc_macro::once;
-use futures::{future::BoxFuture, TryFutureExt};
+use futures::{future::BoxFuture};
 use sha1_smol::Sha1;
 use reqwest::{header::{self, HeaderValue}, Request, Response, Url};
-use std::{borrow::Cow, ops::Deref, sync::{Arc, RwLock}, time::{SystemTime, UNIX_EPOCH}};
+use std::{borrow::Cow, ops::Deref, sync::{Arc, OnceLock, RwLock}, time::{SystemTime, UNIX_EPOCH}};
 
-#[derive(Deserialize, Debug, Clone)]
-struct DynamicRules {
-	#[serde(rename = "app-token")]
-	app_token: String,
-	static_param: String,
-	prefix: String,
-	suffix: String,
-	checksum_constant: i32,
-	checksum_indexes: Vec<usize>,
-}
+use crate::rules::{DynamicRules, DynamicRulesProvider, RulesError};
 
 #[once(time = 3600, result = true, sync_writes = true)]
-async fn get_dynamic_rules() -> reqwest::Result<DynamicRules> {
-	reqwest::get("https://raw.githubusercontent.com/rafa-9/dynamic-rules/refs/heads/main/rules.json")
-	.and_then(Response::json::<DynamicRules>)
-	.await
-	.inspect_err(|err| error!("Error reading dynamic rules: {err:?}"))
+async fn get_dynamic_rules() -> Result<DynamicRules, RulesError> {
+	static PROVIDER: OnceLock<DynamicRulesProvider> = OnceLock::new();
+	let provider = PROVIDER.get_or_try_init(|| { DynamicRulesProvider::new() })?;
+	provider.read().await
 }
 
 #[derive(Debug)]
@@ -109,7 +101,7 @@ impl SharedRequestHeaders {
 #[async_trait::async_trait]
 impl Middleware for SharedRequestHeaders {
 	async fn handle(&self, mut req: Request, extensions: &mut Extensions, next: Next<'_>) -> reqwest_middleware::Result<Response> {
-		let rules = get_dynamic_rules().await?;
+		let rules = get_dynamic_rules().await.map_err(|err| reqwest_middleware::Error::Middleware(err.into()))?;
 		self.insert_into(&rules, &mut req);
 		next.run(req, extensions).await
 	}
